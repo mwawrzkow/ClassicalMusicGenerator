@@ -1,0 +1,11 @@
+{
+    "name": "Tensorflow ROCm",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "tensorflow",
+    "workspaceFolder": "/workspace",
+    "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+    ],
+    "postCreateCommand": "/workspace/src/env/install.sh"
+}

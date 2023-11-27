@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  tensorflow:
+    image: rocm/tensorflow:latest
+    network_mode: host
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    ipc: host
+    shm_size: 16G
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - ${HOME}/dockerx:/dockerx
+      - ../src:/workspace/src
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - HSA_OVERRIDE_GFX_VERSION=10.3.0
