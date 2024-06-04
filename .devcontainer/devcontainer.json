@@ -1,11 +1,7 @@
 {
-    "name": "Tensorflow ROCm",
-    "dockerComposeFile": "docker-compose.yml",
-    "service": "tensorflow",
-    "workspaceFolder": "/workspace",
-    "extensions": [
-        "ms-python.python",
-        "ms-toolsai.jupyter"
-    ],
-    "postCreateCommand": "/workspace/src/env/install.sh"
+  "name": "CUDA Tensorflow - NVIDIA",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "tensorflow",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "/workspace/src/install.sh"
 }

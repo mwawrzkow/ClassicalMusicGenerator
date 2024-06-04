@@ -1,13 +1,17 @@
-version: '3.8'
 services:
   tensorflow:
-    image: rocm/tensorflow:latest
+    # image: tensorflow/tensorflow:latest-gpu # Adjust to the TensorFlow version that you need with GPU support
+    image: nvcr.io/nvidia/tensorflow:23.10-tf2-py3
     network_mode: host
-    devices:
-      - /dev/kfd
-      - /dev/dri
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              count: all
     ipc: host
-    shm_size: 16G
+    shm_size: 32G
     group_add:
       - video
     cap_add:
@@ -16,10 +20,16 @@ services:
       - seccomp:unconfined
     volumes:
       - ${HOME}/dockerx:/dockerx
-      - ../src:/workspace/src
+      - ../src:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix
     stdin_open: true
     tty: true
+    ulimits:
+      memlock: -1
+      stack: 67108864
     environment:
       - DISPLAY=${DISPLAY}
-      - HSA_OVERRIDE_GFX_VERSION=10.3.0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    user: "${UID}:${GID}" # Specify user by UID and GID environment variables
+
