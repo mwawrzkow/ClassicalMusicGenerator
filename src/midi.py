@@ -33,6 +33,7 @@ class Midis:
                     track = Track(mid, i)
                     track.read_notes()
                     notes.extend(track.get_notes())
+                # get ony 512 notes
                 data = notes
                 self.save_notes(notes, filename)
             except Exception as e:
