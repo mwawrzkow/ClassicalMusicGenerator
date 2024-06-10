@@ -1,16 +1,17 @@
 import numpy as np
 from tensorflow.python.data.ops.dataset_ops import DatasetV2
+from tensorflow.python.data.ops.from_tensor_slices_op import _TensorSliceDataset
 from midi import Midis
 import os
 from network import GAN
 import tensorflow as tf
 # set TF_GPU_ALLOCATOR=cuda_malloc_async
-# os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
+os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # Clear the console
 os.system('clear')
 SKIP_NORMALIZATION = False # super parameter
 data = None
-skip = True
+skip = False
 skipMidi = False
 if not SKIP_NORMALIZATION:
     ASYNC = True
@@ -22,7 +23,7 @@ if not SKIP_NORMALIZATION:
 
     if not skipMidi:
         midis = Midis("./midi")
-        midis.read_all(100, ASYNC)
+        midis.read_all(0, ASYNC)
         data = midis.get_notes() 
         np.save("data.npy", data)
         print("Found {} tracks".format(len(data)))
@@ -111,7 +112,7 @@ if not SKIP_NORMALIZATION:
     data = None
 # Normalize each feature separately to be from -1 to 1
 
-
+print(len(notes))
 
 
 
@@ -215,65 +216,63 @@ else:
 
 # Combine back into a single array
 # ignore channel for a while channel
-normalized_data = np.stack([notes, start_times, durations, velocities], axis=1)
-# normalized_data = np.stack([notes_normalized, velocities_normalized, time_normalized], axis=1)
-# create dataset of the normalized data
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if gpus:
-    try:
-        # Currently, memory growth needs to be the same across GPUs
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-    except RuntimeError as e:
-        # Memory growth must be set before GPUs have been initialized
-        print(e)
+# normalized_data = np.stack([notes, start_times, durations, velocities], axis=1)
+batch_size = 256
 
-# print("Creating dataset...")
-# print("Converted notes to tensor")
-# normalized_tensor_notes = tf.convert_to_tensor(notes, dtype=tf.float32)
-# print("Converted start times to tensor")
-# normalized_tensor_start_times = tf.convert_to_tensor(start_times, dtype=tf.float32)
-# print("Converted durations to tensor")
-# normalized_tensor_durations = tf.convert_to_tensor(durations, dtype=tf.float32)
-# print("Converted velocities to tensor")
-# normalized_tensor_velocities = tf.convert_to_tensor(velocities, dtype=tf.float32)
-# print("Converted channel to tensor")
-# normalized_tensor_channel = tf.convert_to_tensor(channel, dtype=tf.float32)
+# dataset_notes = tf.data.Dataset.from_tensor_slices(notes)
+# dataset_start_times = tf.data.Dataset.from_tensor_slices(start_times)
+# dataset_durations = tf.data.Dataset.from_tensor_slices(durations)
+# dataset_velocities = tf.data.Dataset.from_tensor_slices(velocities)
 
-
-def data_generator(data, batch_size):
-    data_length = data.shape[0]
-    indices = np.arange(data_length)
-    np.random.shuffle(indices)  # Shuffle indices to ensure random batches
+def parse_json(file_path):
+    """Parses JSON files to extract data for each event."""
+    raw_data = tf.io.read_file(file_path)
     
-    for start_idx in range(0, data_length, batch_size):
-        end_idx = min(start_idx + batch_size, data_length)
-        batch_indices = indices[start_idx:end_idx]
-        yield data[batch_indices]
+    def parse_json_fn(raw_data):
+        data = json.loads(raw_data.numpy().decode('utf-8'))
+        flat_data = [[float(item['note']), float(item['start_time']), float(item['duration']), float(item['velocity'])] for item in data]
+        tensor = tf.convert_to_tensor(flat_data, dtype=tf.float32)
+        # print("Tensor shape after conversion:", tensor.shape)
+        return tensor
+    
+    result_tensor = tf.py_function(parse_json_fn, [raw_data], [tf.float32])[0]
+    return result_tensor
 
-batch_size = 512
-# Create the dataset from the generator
-len_data = len(normalized_data)
-print(normalized_data.shape)
-dataset = tf.data.Dataset.from_generator(
-    lambda: data_generator(normalized_data, batch_size),
-    output_signature=tf.TensorSpec(shape=(None, 4), dtype=tf.float32)
-)
-# normalized_data = DatasetV2.from_tensor_slices(normalized_data)
-# dataset = dataset.cache()
-# dataset = dataset.shuffle(len_data) #.batch(128, drop_remainder=True)
-# dataset = dataset.prefetch(buffer_size=10)  # Optimize the prefetching
-# if can't create batch of 128 then drop the last batch
+def normalize(tensor):
+    """Normalize the tensor."""
+    tensor = tf.cast(tensor, tf.float32)
+    mean = tf.reduce_mean(tensor, axis=0)
+    std_dev = tf.math.reduce_std(tensor, axis=0)
+    normalized_tensor = (tensor - mean) / (std_dev + 1e-10)
+    return normalized_tensor
 
-# normalized_data = normalized_data.repeat()
+batch_size = 256  # Adjust as needed
+dataset = tf.data.Dataset.list_files("./cache/*.json", shuffle=False)
+dataset = dataset.map(parse_json)
+dataset = dataset.unbatch()  # Unbatch the loaded data
+dataset = dataset.shuffle(buffer_size=1000)  # Shuffle data
+dataset = dataset.batch(batch_size, drop_remainder=True)  # Batch the data into the desired structure
+
 print("Dataset created")
-input_dim = (batch_size,4)
+
+    # # Map the combined dataset to stack the tensors
+# dataset = dataset.map(lambda notes, starts, durations, velocities: tf.stack([notes, starts, durations, velocities], axis=-1))
+
+
+    # # Batch the dataset
+# dataset = dataset.batch(batch_size, drop_remainder=True).shuffle(buffer_size=10000)
+
+print("Dataset created")
+# for sample in dataset:
+#     assert sample.shape == (batch_size, 4), "Invalid shape"
+
+input_dim = (32,4)
 from copy import deepcopy
 # gan = GAN(1000, 3, 3)
 generator_output_dim = (4,)  
 discriminator_input_dim = deepcopy(generator_output_dim)
 gan = GAN(input_dim, generator_output_dim, discriminator_input_dim, skip)
-train_history = gan.train(dataset, 2000 , 35)
+train_history = gan.train(dataset, 10 , 2)
 # plot the training history it shows epoch and generator loss and discriminator loss
 # if not skip:
 #     plt.plot(train_history[:, 0], label="Generator Sloss")
