@@ -1,8 +1,16 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, Sequential, Model, mixed_precision
-from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, BatchNormalization, Reshape, Input, Flatten
+from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, BatchNormalization, Reshape, Input, Flatten, LayerNormalization
+
+
+
 # test also with tensorflow.python.keras 
+# Check LSTM without dense 
+# simple RNN 
+# smaller dataset bigger batch sizes 
+
+
 from tqdm import tqdm
 from tensorflow.keras import regularizers
 from tensorflow.keras.callbacks import TensorBoard
@@ -50,24 +58,31 @@ class GAN:
             print("Model loaded successfully.")
             self.generator.summary()
             self.critic.summary()
-            # should we compile the model again?
+            # compile the model after loading
+            # self.generator_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            # self.generator.compile(optimizer=self.generator_optimizer)
+            # self.critic_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            # self.critic.compile(optimizer=self.critic_optimizer)
+            
 
         else: 
             self.generator = self.build_generator()
             self.critic = self.build_discriminator()
             
-            # self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
-            self.generator_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001, beta_1=0.5, beta_2=0.9)
+            # self.generator_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
             self.generator.compile(optimizer=self.generator_optimizer)
-            self.critic_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            # self.critic_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001, beta_1=0.5, beta_2=0.9)
             self.critic.compile(optimizer=self.critic_optimizer)
         
     def build_generator(self):
         model = Sequential()
         model.add(Input(shape=(self.input_dim)))  # Adding sequence length of 1
-        model.add(Dense(128)) # for now simplify 
-        model.add(Bidirectional(LSTM(128)))
-        model.add(Dense(128))
+        # model.add(Dense(128)) # for now simplify 
+        model.add(Bidirectional(LSTM(128, return_sequences=True)))
+        model.add(Dense(128, kernel_initializer='he_normal'))
+        # model.add(BatchNormalization())
         # model.add(layers.BatchNormalization())
         # model.add(layers.LeakyReLU())
         # # model.add(Bidirectional(LSTM(128, return_sequences=False)))
@@ -76,8 +91,11 @@ class GAN:
         # model.add(BatchNormalization(momentum=0.8))
         num_output_units = np.prod(self.generator_output_dim) 
         model.add(Flatten())
+        model.add(LayerNormalization())
         # model.add(Dense(num_output_units, activation='tanh'))    
-        model.add(Dense(self.generator_output_dim[0], activation='tanh'))    
+        # model.add(Dense(self.generator_output_dim[0], activation='tanh'))    
+        model.add(Dense(self.generator_output_dim[0], activation='sigmoid'))    
+
         # model.add(Reshape(self.generator_output_dim))    
         # model.add(Dense(self.generator_output_dim[0], activation='relu'))
         model.summary()
@@ -99,18 +117,19 @@ class GAN:
         # make 3D
         model.add(Reshape((self.discriminator_output_dim[0], 1)))
         model.add(Dense(128)) # for now simplify
-        model.add(Bidirectional(LSTM(128)))
+        model.add(Bidirectional(LSTM(128, return_sequences=True)))
         model.add(Dense(128))
         # model.add(layers.BatchNormalization())
         # model.add(layers.LeakyReLU())
         # # model.add(Bidirectional(LSTM(128, return_sequences=False)))
         # model.add(Dense(256, activation='relu'))
         # model.add(LeakyReLU(alpha=0.2))
-        model.add(BatchNormalization(momentum=0.8))
+        # model.add(BatchNormalization(momentum=0.8))
         num_output_units = np.prod(self.generator_output_dim) 
         model.add(Flatten())
         # model.add(Dense(num_output_units, activation='tanh'))    
         model.add(Dense(self.generator_output_dim[0], activation='tanh')) 
+        model.add(LayerNormalization())
         # model.add(Dense(256, activation='relu'))
         # model.add(Bidirectional(LSTM(256)))
         # model.add(Dense(256, activation='relu'))
@@ -128,14 +147,13 @@ class GAN:
         # model.add(LeakyReLU(alpha=0.2))
         # model.add(Dense(1, activation='sigmoid'))
         return model
-    
     def generate_data(self, num_samples):
         # generate only data which is not detected as fake by the discriminator
         noise = self.generate_noise(num_samples)
-        generated_data = self.generator.predict(noise)
-        critic_scores = self.critic.predict(generated_data)
-        avarage_score = np.mean(critic_scores)
-        print(f"Average critic score: {avarage_score}")
+        generated_data = self.generator(noise, training=False)
+        # critic_scores = self.critic(generated_data, training=False)
+        # avarage_score = np.mean(critic_scores)
+        # print(f"Average critic score: {avarage_score}")
         return generated_data
         
     def generate_real_batch(self, real_data, batch_size):
@@ -148,8 +166,8 @@ class GAN:
         return tf.random.normal([batch_size, self.input_dim[0], self.input_dim[1]])
     @tf.function
     def train_step(self, real_data):
-        batch_size = 256
-        lambda_gp = 10.0  # Gradient penalty coefficient
+        batch_size = 1024
+        lambda_gp = 5.0  # Gradient penalty coefficient
         seed_part1 = 4
         seed_part2 = 2
         seed = [seed_part1, seed_part2]
@@ -161,7 +179,7 @@ class GAN:
                 fake_scores = self.critic(fake_data, training=True)
 
                 # Example usage of stateless random function with a seed
-                alpha = tf.random.stateless_uniform(shape=(batch_size, 1), seed=seed, minval=0.0, maxval=1.0)
+                alpha = tf.random.uniform(shape=(batch_size, 1), minval=0.8, maxval=1.0)
 
                 interpolated = real_data * alpha + fake_data * (1 - alpha)
                 with tf.GradientTape() as gp_tape:
@@ -249,6 +267,8 @@ class GAN:
                 if patience_counter >= patience:
                     print("Early stopping...")
                     break
+        self.generator.save("generator.keras")
+        self.critic.save("discriminator.keras")
         # profiler.stop() 
     # @tf.function(jit_compile=True)
     def wasserstein_loss(self, y_true, y_pred):
