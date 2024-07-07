@@ -1,7 +1,7 @@
 services:
   tensorflow:
     # image: tensorflow/tensorflow:latest-gpu # Adjust to the TensorFlow version that you need with GPU support
-    image: nvcr.io/nvidia/tensorflow:24.05-tf2-py3
+    image: nvcr.io/nvidia/tensorflow:23.12-tf2-py3
     network_mode: host
     deploy:
       resources:

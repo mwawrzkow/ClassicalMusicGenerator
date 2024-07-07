@@ -12,7 +12,7 @@ plots/
 src/midi
 src/cache 
 src/src/*
-src/*.py
+!src/*.py
 src/*.json
 # ignore any .keras files anywhere in the repository
 .keras

@@ -22,8 +22,8 @@ if not SKIP_NORMALIZATION:
         skipMidi = bool(input("Do you want to skip reading the midis? y/N ").lower() == "y")
 
     if not skipMidi:
-        midis = Midis("./midi")
-        midis.read_all(0, ASYNC)
+        midis = Midis("./Chopin")
+        midis.read_all(100, ASYNC)
         data = midis.get_notes() 
         np.save("data.npy", data)
         print("Found {} tracks".format(len(data)))
@@ -246,16 +246,15 @@ def normalize(tensor):
     normalized_tensor = (tensor - mean) / (std_dev + 1e-10)
     return normalized_tensor
 
-batch_size = 256  # Adjust as needed
+#batch_size = 256  # Adjust as needed
+batch_size = 1024
 dataset = tf.data.Dataset.list_files("./cache/*.json", shuffle=False)
 dataset = dataset.map(parse_json)
 dataset = dataset.unbatch()  # Unbatch the loaded data
 dataset = dataset.shuffle(buffer_size=1000)  # Shuffle data
 dataset = dataset.batch(batch_size, drop_remainder=True)  # Batch the data into the desired structure
 
-print("Dataset created")
-
-    # # Map the combined dataset to stack the tensors
+# # Map the combined dataset to stack the tensors
 # dataset = dataset.map(lambda notes, starts, durations, velocities: tf.stack([notes, starts, durations, velocities], axis=-1))
 
 
@@ -272,7 +271,7 @@ from copy import deepcopy
 generator_output_dim = (4,)  
 discriminator_input_dim = deepcopy(generator_output_dim)
 gan = GAN(input_dim, generator_output_dim, discriminator_input_dim, skip)
-train_history = gan.train(dataset, 10 , 2)
+train_history = gan.train(dataset, 300)
 # plot the training history it shows epoch and generator loss and discriminator loss
 # if not skip:
 #     plt.plot(train_history[:, 0], label="Generator Sloss")
