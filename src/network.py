@@ -69,11 +69,11 @@ class GAN:
             self.generator = self.build_generator()
             self.critic = self.build_discriminator()
             
-            self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001, beta_1=0.5, beta_2=0.9)
-            # self.generator_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            # self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001)
+            self.generator_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
             self.generator.compile(optimizer=self.generator_optimizer)
-            # self.critic_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
-            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001, beta_1=0.5, beta_2=0.9)
+            self.critic_optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.00005)
+            # self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001)
             self.critic.compile(optimizer=self.critic_optimizer)
         
     def build_generator(self):
@@ -167,10 +167,8 @@ class GAN:
     @tf.function
     def train_step(self, real_data):
         batch_size = 1024
-        lambda_gp = 5.0  # Gradient penalty coefficient
-        seed_part1 = 4
-        seed_part2 = 2
-        seed = [seed_part1, seed_part2]
+        lambda_gp = 10.0  # Gradient penalty coefficient
+        mcritic_loss =[]
         for _ in range(5):
             noise = self.generate_noise(batch_size)
             with tf.GradientTape() as tape:
@@ -179,7 +177,7 @@ class GAN:
                 fake_scores = self.critic(fake_data, training=True)
 
                 # Example usage of stateless random function with a seed
-                alpha = tf.random.uniform(shape=(batch_size, 1), minval=0.8, maxval=1.0)
+                alpha = tf.random.uniform(shape=(batch_size, 1), minval=0.0, maxval=1.0)
 
                 interpolated = real_data * alpha + fake_data * (1 - alpha)
                 with tf.GradientTape() as gp_tape:
@@ -190,10 +188,11 @@ class GAN:
                 gradient_penalty = lambda_gp * tf.reduce_mean((grad_norm - 1.0) ** 2)
 
                 critic_loss = (self.wasserstein_loss(-tf.ones_like(real_scores), real_scores) + 
-                            self.wasserstein_loss(tf.ones_like(fake_scores), fake_scores) + 
-                            gradient_penalty)
+                               self.wasserstein_loss(tf.ones_like(fake_scores), fake_scores) + 
+                               gradient_penalty)
 
             gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+            mcritic_loss.append(critic_loss)
             self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
 
         # Generator update
@@ -205,7 +204,7 @@ class GAN:
 
         gen_gradients = tape.gradient(gen_loss, self.generator.trainable_variables)
         self.generator_optimizer.apply_gradients(zip(gen_gradients, self.generator.trainable_variables))
-        return gen_loss, critic_loss
+        return gen_loss, mcritic_loss
 
 
 
@@ -224,12 +223,12 @@ class GAN:
             # else:
             #     gen_loss, disc_loss = self.train_step(real_batch, train_only_discriminator=True)
             # Log every 1000 steps
-            
+            crit_loss_mean = np.mean(disc_loss)
             epoch_gen_loss.append(gen_loss)
-            epoch_disc_loss.append(disc_loss)
+            epoch_disc_loss.append(crit_loss_mean)
             with self.train_summary_writer.as_default():
                 tf.summary.scalar('Generator Loss', gen_loss, step=self.train_step_counter)
-                tf.summary.scalar('Discriminator Loss', disc_loss, step=self.train_step_counter)
+                tf.summary.scalar('Discriminator Loss', crit_loss_mean, step=self.train_step_counter)
                 self.train_summary_writer.flush()
 
             
