@@ -271,7 +271,7 @@ from copy import deepcopy
 generator_output_dim = (4,)  
 discriminator_input_dim = deepcopy(generator_output_dim)
 gan = GAN(input_dim, generator_output_dim, discriminator_input_dim, skip)
-train_history = gan.train(dataset, 300)
+train_history = gan.train(dataset, 1000, 25)
 # plot the training history it shows epoch and generator loss and discriminator loss
 # if not skip:
 #     plt.plot(train_history[:, 0], label="Generator Sloss")
