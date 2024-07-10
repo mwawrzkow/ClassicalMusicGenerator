@@ -5,6 +5,7 @@ from midi import Midis
 import os
 from network import GAN
 import tensorflow as tf
+import pandas as pd 
 # set TF_GPU_ALLOCATOR=cuda_malloc_async
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # Clear the console
@@ -247,7 +248,7 @@ def normalize(tensor):
     return normalized_tensor
 
 #batch_size = 256  # Adjust as needed
-batch_size = 1024
+batch_size = 512
 dataset = tf.data.Dataset.list_files("./cache/*.json", shuffle=False)
 dataset = dataset.map(parse_json)
 dataset = dataset.unbatch()  # Unbatch the loaded data
@@ -265,13 +266,13 @@ print("Dataset created")
 # for sample in dataset:
 #     assert sample.shape == (batch_size, 4), "Invalid shape"
 
-input_dim = (32,4)
+input_dim = (64,4)
 from copy import deepcopy
 # gan = GAN(1000, 3, 3)
 generator_output_dim = (4,)  
 discriminator_input_dim = deepcopy(generator_output_dim)
 gan = GAN(input_dim, generator_output_dim, discriminator_input_dim, skip)
-train_history = gan.train(dataset, 1000, 25)
+train_history = gan.train(dataset, 100, 10)
 # plot the training history it shows epoch and generator loss and discriminator loss
 # if not skip:
 #     plt.plot(train_history[:, 0], label="Generator Sloss")
@@ -284,10 +285,12 @@ train_history = gan.train(dataset, 1000, 25)
 #     np.save("training_history.npy", train_history)
 
 # now generate some data
-generated_data = gan.generate_data(256)
+generated_data = gan.generate_data(512)
 # save generated data to a file
 np.save("generated_data.npy", generated_data)
-
+generated_data_from_file = np.load("generated_data.npy")
+df = pd.DataFrame(generated_data_from_file)
+df.to_csv("generated_data.csv", index=False)
 # def denormalize(data, original_data):
 #     generated_notes = data[:, 0]
 #     generated_durations = data[:, 1]
