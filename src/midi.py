@@ -15,6 +15,7 @@ class Midis:
         self.path = path
         self.files = []
         self.notes = []  # Dictionary to store notes with their start and end times
+        self.avarage_ticks_per_beat = 0
 
     def read_midi(self, midi):
         notes = []
@@ -23,6 +24,7 @@ class Midis:
         # if not, then read the midi file and save it
         filename = str(self.deterministic_hash(midi[0])) + ".json"
         data = []
+        ticks_per_beat = 0
         if os.path.exists(os.path.join("cache", filename)):
             with open(os.path.join("cache", filename), "r") as f:
                 data = json.load(f)                
@@ -35,6 +37,7 @@ class Midis:
                     notes.extend(track.get_notes())
                 # get ony 512 notes
                 data = notes
+                ticks_per_beat = mid.ticks_per_beat
                 self.save_notes(notes, filename)
             except Exception as e:
                 print(f"Error processing {midi[0]}: {e}") 
@@ -45,7 +48,7 @@ class Midis:
 
         
 
-        return data
+        return data, ticks_per_beat
         
     def save_notes(self, notes, filename):
         if not os.path.exists("cache"):
@@ -76,6 +79,7 @@ class Midis:
         midi_combined = "".join([midi[0] for midi in sorted_midis])
         midi_hashed = str(self.deterministic_hash(midi_combined))
             # with concurrent.futures.ThreadPoolExecutor() as executor:
+        ticks_per_beat = []
         if ASYNC:
             with concurrent.futures.ProcessPoolExecutor(max_workers=16) as executor:
                 
@@ -83,7 +87,8 @@ class Midis:
                 for future in tqdm(concurrent.futures.as_completed(executors), total=len(sorted_midis), desc="Processing MIDI files"):
                     # clear console
                     try: 
-                        data.append(future.result())
+                        data.append(future.result()[0])
+                        ticks_per_beat.append(future.result()[1])
                     except Exception as e:
                         print(e)
                         continue
@@ -91,7 +96,7 @@ class Midis:
             for midi in self.files:
                 data.append(self.read_midi(midi))
 
-
+        self.avarage_ticks_per_beat = int(np.mean(ticks_per_beat))
         print(f"Reading all midis took {time.time() - start_time} seconds")
             
         # start_time = time.time()
@@ -117,3 +122,6 @@ class Midis:
         
     def get_notes(self) -> list[dict]:
         return self.notes
+    
+    def get_avarage_ticks_per_beat(self) -> int:
+        return self.avarage_ticks_per_beat

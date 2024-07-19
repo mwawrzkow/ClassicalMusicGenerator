@@ -14,6 +14,7 @@ SKIP_NORMALIZATION = False # super parameter
 data = None
 skip = False
 skipMidi = False
+ticks_per_beat = 0
 if not SKIP_NORMALIZATION:
     ASYNC = True
 
@@ -23,11 +24,13 @@ if not SKIP_NORMALIZATION:
         skipMidi = bool(input("Do you want to skip reading the midis? y/N ").lower() == "y")
 
     if not skipMidi:
-        midis = Midis("./Chopin")
-        midis.read_all(100, ASYNC)
+        midis = Midis("./Scarlatti")
+        midis.read_all(25, ASYNC)
         data = midis.get_notes() 
+        ticks_per_beat = midis.get_avarage_ticks_per_beat()
         np.save("data.npy", data)
         print("Found {} tracks".format(len(data)))
+
         # exit()
     # save data to a file
     else:
@@ -218,7 +221,7 @@ else:
 # Combine back into a single array
 # ignore channel for a while channel
 # normalized_data = np.stack([notes, start_times, durations, velocities], axis=1)
-batch_size = 256
+
 
 # dataset_notes = tf.data.Dataset.from_tensor_slices(notes)
 # dataset_start_times = tf.data.Dataset.from_tensor_slices(start_times)
@@ -231,7 +234,12 @@ def parse_json(file_path):
     
     def parse_json_fn(raw_data):
         data = json.loads(raw_data.numpy().decode('utf-8'))
-        flat_data = [[float(item['note']), float(item['start_time']), float(item['duration']), float(item['velocity'])] for item in data]
+        # trim the data to be 512
+        data = data[:512]
+        flat_data = [[(float(item['note']) - notes_min_max[0]) / (notes_min_max[1] - notes_min_max[0] + 1e-10),
+              (float(item['start_time']) - start_times_min_max[0]) / (start_times_min_max[1] - start_times_min_max[0] + 1e-10),
+              (float(item['duration']) - durations_min_max[0]) / (durations_min_max[1] - durations_min_max[0] + 1e-10),
+              (float(item['velocity']) - velocities_min_max[0]) / (velocities_min_max[1] - velocities_min_max[0] + 1e-10)] for item in data]
         tensor = tf.convert_to_tensor(flat_data, dtype=tf.float32)
         # print("Tensor shape after conversion:", tensor.shape)
         return tensor
@@ -272,7 +280,7 @@ from copy import deepcopy
 generator_output_dim = (4,)  
 discriminator_input_dim = deepcopy(generator_output_dim)
 gan = GAN(input_dim, generator_output_dim, discriminator_input_dim, skip)
-train_history = gan.train(dataset, 100, 10)
+train_history = gan.train(dataset, 30, 2)
 # plot the training history it shows epoch and generator loss and discriminator loss
 # if not skip:
 #     plt.plot(train_history[:, 0], label="Generator Sloss")
@@ -303,36 +311,52 @@ df.to_csv("generated_data.csv", index=False)
 #     generated_time = generated_time * (original_data[:, 3].max() - original_data[:, 3].min()) + original_data[:, 3].min()
 #     generated_time = np.clip(generated_time, 0, None)
 #     return np.stack([generated_notes, generated_durations, generated_velocities, generated_time], axis=1)
-def denormalize_list_of_lists(normalized_data, min_max):
+def denormalize_list_of_lists(normalized_data, min_max_notes, min_max_start_times, min_max_durations, min_max_velocities):
     # Extract the min and max values used for normalization
-    min_val, max_val = min_max
+    notes_min, notes_max = min_max_notes
+    start_times_min, start_times_max = min_max_start_times
+    durations_min, durations_max = min_max_durations
+    velocities_min, velocities_max = min_max_velocities
     
     # Convert the normalized list of lists to a NumPy array
     normalized_array = np.array(normalized_data, dtype=float)
     
     # Check if the array is empty or if min_val equals max_val
-    if normalized_array.size == 0 or min_val == max_val:
+    if normalized_array.size == 0 or notes_min == notes_max or start_times_min == start_times_max or durations_min == durations_max or velocities_min == velocities_max:
         return normalized_array.tolist()  # Return the original array as list
     
     # Denormalize the data
-    denormalized_array = ((normalized_array + 1) / 2) * (max_val - min_val) + min_val
+    denormalized_array = np.zeros_like(normalized_array)
+    denormalized_array[:, 0] = (normalized_array[:, 0] + 1) / 2 * (notes_max - notes_min) + notes_min
+    denormalized_array[:, 1] = (normalized_array[:, 1] + 1) / 2 * (start_times_max - start_times_min) + start_times_min
+    denormalized_array[:, 2] = (normalized_array[:, 2] + 1) / 2 * (durations_max - durations_min) + durations_min
+    denormalized_array[:, 3] = (normalized_array[:, 3] + 1) / 2 * (velocities_max - velocities_min) + velocities_min
+    # ensure all values int and non-negative
+    denormalized_array = np.round(denormalized_array).astype(int)
+    denormalized_array = np.clip(denormalized_array, 0, None)
+
     
     return denormalized_array.tolist()
 
 # Ensure time values are non-negative
 # now we have generated notes and durations and velocities
 # now we need to convert them to midi
-import mido
 from mido import MidiFile, MidiTrack, Message
 
 mid = MidiFile()
 # set default values for midi file
-mid.ticks_per_beat = 480
+mid.ticks_per_beat = ticks_per_beat
 
 track = MidiTrack()
 mid.tracks.append(track)
+# set default values for midi file
+track.append(Message('program_change', program=0, time=0))
+# set volume
+track.append(Message('control_change', control=7, value=100, time=0))
+
+
 # denormalize generated data
-generated = denormalize_list_of_lists(generated_data, notes_min_max)
+generated = denormalize_list_of_lists(generated_data, notes_min_max, start_times_min_max, durations_min_max, velocities_min_max)
 # remove last output.json if exists
 if os.path.exists("output.json"):
     os.remove("output.json")
@@ -384,7 +408,20 @@ midi_notes = sorted(midi_notes, key=lambda x: x['time'])
 # midi_notes = sorted(midi_notes, key=lambda x: x['time'])
 # now create the midi file from the notes with respective durations and velocities
 # now we need to convert the generated data to midi
-for note in midi_notes:
+
+def ensure_midi_compatybility(midi: list): 
+    for note in midi:
+        if note['type'] == 'note_off':
+            note['type'] = 'note_on'
+            note['velocity'] = 0
+    # ensure all values are between 0 and 127
+    for note in midi:
+        note['note'] = np.clip(note['note'], 0, 127)
+        note['velocity'] = np.clip(note['velocity'], 0, 127)
+    return midi
+
+
+for note in ensure_midi_compatybility(midi_notes):
     if note['type'] == 'note_on':
         track.append(Message('note_on', note=note['note'], velocity=note['velocity'], time=int(note['time'])))
     else:

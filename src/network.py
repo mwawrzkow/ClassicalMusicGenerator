@@ -1,7 +1,8 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, Sequential, Model, mixed_precision
-from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, BatchNormalization, Reshape, Input, Flatten, LayerNormalization
+from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, BatchNormalization, Reshape, Input, Flatten, LayerNormalization, Dropout
+from tensorflow.keras.optimizers.schedules import ExponentialDecay
 
 
 
@@ -10,6 +11,13 @@ from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, Batch
 # simple RNN 
 # smaller dataset bigger batch sizes 
 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 
 from tqdm import tqdm
 from tensorflow.keras import regularizers
@@ -21,6 +29,9 @@ from tensorflow.python.client import device_lib
 print(device_lib.list_local_devices())
 if not tf.config.list_physical_devices('GPU'):
     raise RuntimeError("No GPU found, can't continue.")
+
+# enable jit compilation
+tf.config.optimizer.set_jit(True)
 # policy = mixed_precision.Policy('mixed_float16')
 # mixed_precision.set_global_policy(policy)
 
@@ -66,51 +77,36 @@ class GAN:
             
 
         else: 
+            initial_lr_gen = 1e-3
+            initial_lr_disc = 1e-3
+
+            # Learning rate scheduler
+            # lr_schedule_gen = ExponentialDecay(initial_lr_gen, decay_steps=10000, decay_rate=0.96, staircase=True)
+            # lr_schedule_disc = ExponentialDecay(initial_lr_disc, decay_steps=10000, decay_rate=0.96, staircase=True)
             self.generator = self.build_generator()
             self.critic = self.build_discriminator()
             
             # self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001)
-            self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00003)
+            self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0000001, beta_1=0.5, beta_2=0.99)
+            # self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule_gen)
             self.generator.compile(optimizer=self.generator_optimizer)
-            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.000001)
-            # self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001)
+            # self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule_disc)
+            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.000001, beta_1=0.5, beta_2=0.9)
             self.critic.compile(optimizer=self.critic_optimizer)
         
     def build_generator(self):
         model = Sequential()
-        model.add(Input(shape=(self.input_dim)))  # Adding sequence length of 1
-        # model.add(Dense(128)) # for now simplify 
-        model.add(Bidirectional(LSTM(1024, return_sequences=True)))
-        model.add(Dense(512, kernel_initializer='he_normal'))
-        model.add(Dense(256))
-        model.add(Dense(512))
-        # model.add(BatchNormalization())
-        # model.add(layers.BatchNormalization())
-        # model.add(layers.LeakyReLU())
-        # # model.add(Bidirectional(LSTM(128, return_sequences=False)))
-        # model.add(Dense(256, activation='relu'))
-        # model.add(LeakyReLU(alpha=0.2))
-        # model.add(BatchNormalization(momentum=0.8))
-        num_output_units = np.prod(self.generator_output_dim) 
-        model.add(Flatten())
+        model.add(LSTM(2048, input_shape=self.input_dim ,return_sequences=True))
+        model.add(Bidirectional(LSTM(3072)))
+        model.add(Dense(1024, kernel_initializer='he_normal'))
+        model.add(LeakyReLU(alpha=0.2))
+        # model.add(Flatten())
+        model.add(Dense(254))
+        model.add(Dropout(0.2))
+        model.add(Dense(128))
+        model.add(Dense(self.generator_output_dim[0], activation='linear'))    
         model.add(LayerNormalization())
-        # model.add(Dense(num_output_units, activation='tanh'))    
-        # model.add(Dense(self.generator_output_dim[0], activation='tanh'))    
-        model.add(Dense(self.generator_output_dim[0], activation='sigmoid'))    
-
-        # model.add(Reshape(self.generator_output_dim))    
-        # model.add(Dense(self.generator_output_dim[0], activation='relu'))
         model.summary()
-        # model.add(LSTM(32, return_sequences=True))  # Maintain 3D output for sequence processing
-        # model.add(Bidirectional(LSTM(64)))  # Combines forward and backward LSTM
-        # model.add(Dense(256, activation='relu'))
-        # model.add(LeakyReLU(alpha=0.2))
-        # model.add(BatchNormalization(momentum=0.8))
-        # model.add(Dense(512, activation='relu'))
-        # model.add(LeakyReLU(alpha=0.2))
-        # model.add(BatchNormalization(momentum=0.8))
-        # model.add(Dense(np.prod(self.generator_output_dim), activation='tanh'))
-        # model.add(Reshape(self.generator_output_dim))
         return model
     
     def build_discriminator(self):
@@ -119,8 +115,13 @@ class GAN:
         # make 3D
         model.add(Reshape((self.discriminator_output_dim[0], 1)))
         # model.add(Dense(256)) # for now simplify
+        model.add(LSTM(2048, return_sequences=True))
         model.add(Bidirectional(LSTM(2048, return_sequences=True)))
-        model.add(Dense(2048))
+        model.add(Dense(2048,  kernel_initializer='he_normal', activation='linear'))
+        model.add(Dense(1024))
+        model.add(LeakyReLU(alpha=0.2))
+        model.add(Dense(1024))
+        model.add(Dense(256))
         # model.add(layers.BatchNormalization())
         # model.add(layers.LeakyReLU())
         # # model.add(Bidirectional(LSTM(128, return_sequences=False)))
@@ -129,10 +130,10 @@ class GAN:
         # model.add(BatchNormalization(momentum=0.8))
         num_output_units = np.prod(self.generator_output_dim) 
         model.add(Flatten())
-        model.add(Dense(1024))
+        model.add(Dense(1024 ,  kernel_initializer='he_normal'))
         # model.add(Dense(num_output_units, activation='tanh'))    
-        model.add(Dense(self.generator_output_dim[0], activation='sigmoid')) 
-        model.add(LayerNormalization())
+        model.add(Dense(self.generator_output_dim[0], kernel_initializer='he_normal')) 
+        # model.add(LayerNormalization())
         # model.add(Dense(256, activation='relu'))
         # model.add(Bidirectional(LSTM(256)))
         # model.add(Dense(256, activation='relu'))
@@ -140,7 +141,7 @@ class GAN:
         # model.add(BatchNormalization(momentum=0.9))
         # # model.add(BatchNormalization(momentum=0.8))
         # model.add(LeakyReLU(alpha=0.2))
-        model.add(Dense(1, activation='sigmoid'))
+        model.add(Dense(1, activation='linear',  kernel_initializer='he_normal'))
         model.summary()
         # model.add(LSTM(512, return_sequences=True))
         # model.add(Bidirectional(LSTM(512)))
@@ -167,6 +168,19 @@ class GAN:
     
     def generate_noise(self, batch_size):
         return tf.random.normal([batch_size, self.input_dim[0], self.input_dim[1]])
+    
+    @tf.function
+    def lipschitz_penalty(self, real_data):
+        with tf.GradientTape() as tape:
+            tape.watch(real_data)
+            real_scores = self.critic(real_data, training=True)
+        
+        gradients = tape.gradient(real_scores, [real_data])[0]
+        grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
+        lipschitz_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0))
+        
+        return lipschitz_penalty
+
     @tf.function
     def gradient_penalty(self, real_data, fake_data, batch_size):
         epsilon = tf.random.uniform(shape=[batch_size, 1,], minval=0.0, maxval=1)
@@ -177,42 +191,112 @@ class GAN:
             interpolated_scores = self.critic(interpolated, training=True)
         
         gradients = gp_tape.gradient(interpolated_scores, [interpolated])[0]
+        gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
         grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
         gradient_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0))
         
         return gradient_penalty
 
+
     @tf.function
-    def train_step(self, real_data):
-        batch_size = 512
-        lambda_gp = 10.0
+    def train_critic_Interpolated(self, real_data, batch_size): 
+        lambda_lp = 5.0
         mcritic_loss = []
         
-        for _ in range(10):
-            noise = self.generate_noise(batch_size)
-            with tf.GradientTape() as tape:
-                real_scores = self.critic(real_data, training=True)
-                fake_data = self.generator(noise, training=False)
-                fake_scores = self.critic(fake_data, training=True)
-
-                gradient_penalty = self.gradient_penalty(real_data, fake_data, batch_size)
-                critic_loss = (tf.reduce_mean(fake_scores) - tf.reduce_mean(real_scores) + lambda_gp * gradient_penalty)
+        # for _ in range(5):
+        noise = self.generate_noise(batch_size)
+        fake_data = self.generator(noise, training=False)
+        
+        # Generate interpolated data
+        epsilon = tf.random.uniform(shape=[batch_size, 1], minval=0.0, maxval=1.0)
+        interpolated = epsilon * real_data + (1 - epsilon) * fake_data
+        
+        with tf.GradientTape() as tape:
+            real_scores = self.critic(real_data, training=True)
+            fake_scores = self.critic(fake_data, training=True)
+            
+            # Compute the Lipschitz penalty for interpolated data
+            lipschitz_penalty_value = self.lipschitz_penalty(interpolated)
+            
+            # Critic loss
+            critic_loss = -tf.reduce_mean(real_scores) + tf.reduce_mean(fake_scores) + lambda_lp * lipschitz_penalty_value
 
             gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+            gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]  # Gradient clipping
             mcritic_loss.append(critic_loss)
             self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+        
+        return mcritic_loss
+
+    @tf.function
+    def train_critic_realData(self, real_data):
+        lambda_lp = 15.0
+        mcritic_loss = []
+        # for _ in range(5):
+        with tf.GradientTape() as tape:
+            real_scores = self.critic(real_data, training=True)
+            lipschitz_penalty = self.lipschitz_penalty(real_data)
+            critic_loss = -tf.reduce_mean(real_scores) + lambda_lp * lipschitz_penalty
+                # critic_loss = -tf.reduce_mean(real_scores)  # Critic wants to maximize the scores of real data
+
+        gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+        gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
+        mcritic_loss.append(critic_loss)
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+        return mcritic_loss
+
+    @tf.function
+    def train_critic_generatedData(self, batch_size):
+        lambda_lp = 8.0
+        mcritic_loss = []
+        # for _ in range(3):
+        noise = self.generate_noise(batch_size)
+        with tf.GradientTape() as tape:
+            fake_data = self.generator(noise, training=False)
+            fake_scores = self.critic(fake_data, training=True)
+            lipschitz_penalty = self.lipschitz_penalty(fake_data)
+            critic_loss = tf.reduce_mean(fake_scores) + lambda_lp * lipschitz_penalty
+            # critic_loss = tf.reduce_mean(fake_scores)  # Critic wants to minimize the scores of fake data
+
+        gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+        gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
+
+        mcritic_loss.append(critic_loss)
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+        return mcritic_loss
+
+
+    @tf.function
+    def generator_train_step(self, batch_size):      
 
         noise = self.generate_noise(batch_size)
         with tf.GradientTape() as tape:
             generated_data = self.generator(noise, training=True)
             generated_scores = self.critic(generated_data, training=True)
             gen_loss = -tf.reduce_mean(generated_scores)
-
+        # gen_gradients = self.generator_loss(generated_scores, tf.ones_like(generated_scores))
         gen_gradients = tape.gradient(gen_loss, self.generator.trainable_variables)
+        gen_gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gen_gradients]
         self.generator_optimizer.apply_gradients(zip(gen_gradients, self.generator.trainable_variables))
         
-        return gen_loss, mcritic_loss
+        return gen_loss
+    @tf.function
+    def train_step(self, real_data):
+        batch_size = 512
 
+        # Train the critic with real data
+        real_critic_loss = self.train_critic_realData(real_data)
+        
+        # Train the critic with generated data
+        generated_critic_loss = self.train_critic_generatedData(batch_size)
+        
+        # Train the critic with interpolated data
+        interpolated_critic_loss = self.train_critic_Interpolated(real_data, batch_size)
+
+        # Train the generator
+        gen_loss = self.generator_train_step(batch_size)
+        
+        return gen_loss, real_critic_loss + generated_critic_loss + interpolated_critic_loss
     # @tf.function(jit_compile=True)
     def train_epoch(self, dataset: tf.data.Dataset):
         epoch_gen_loss = []
@@ -246,12 +330,12 @@ class GAN:
             print("Model loaded, skipping training")
             return
         logdir = "src/logs/" + datetime.now().strftime("%Y%m%d-%H%M%S")
-        tensorboard_callback = TensorBoard(log_dir=logdir, histogram_freq=1)
         self.train_summary_writer = tf.summary.create_file_writer(logdir)
         self.train_step_counter = tf.Variable(0, dtype=tf.int64)
         best_loss = float('inf')
         patience_counter = 0
         # profiler.start(logdir)
+        actual_epochs = 0
         for epoch in range(num_epochs):
             epoch_gen_loss, epoch_disc_loss = self.train_epoch(dataset)
             
@@ -260,18 +344,17 @@ class GAN:
             print(f"Epoch {epoch}: Generator Loss = {avg_gen_loss}, Discriminator Loss = {avg_disc_loss}")
             # abs avg loss
             avg_disc_loss = abs(avg_disc_loss)
-            # Early stopping logic remains the same...
-            if avg_disc_loss < best_loss:
-                best_loss = avg_disc_loss
-                patience_counter = 0
-                self.generator.save("generator.keras")
-                self.critic.save("discriminator.keras")
-            else:
-                patience_counter += 1
-                print(f"Patience counter: {patience_counter} / {patience}")
-                if patience_counter >= patience:
-                    print("Early stopping...")
-                    break
+            # Ignore the first half of the epochs for early stopping
+            if actual_epochs >= num_epochs / 2:
+                if avg_disc_loss < best_loss:
+                    best_loss = avg_disc_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    print(f"Patience counter: {patience_counter} / {patience}")
+                    if patience_counter >= patience:
+                        print("Early stopping...")
+                        break
         self.generator.save("generator.keras")
         self.critic.save("discriminator.keras")
         # profiler.stop() 

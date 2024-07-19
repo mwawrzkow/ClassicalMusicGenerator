@@ -40,7 +40,7 @@ class Track:
                     'channel': current_notes[msg.note]['channel']
                 })
                 del current_notes[msg.note]
-
+        
     def _convert_to_quarter_length(self, ticks):
         quarter_length = (ticks / self.ticks_per_beat) * (self.tempo / 1000000.0)
         return quarter_length
