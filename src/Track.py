@@ -1,48 +1,37 @@
-import mido
-from mido import MidiFile, Message
+import pretty_midi
 
 class Track:
-    def __init__(self, midi_file, track_id=0):
-        self.midi_file = midi_file
+    def __init__(self, midi_data, track_id=0):
+        self.midi_data = midi_data
         self.track_id = track_id
         self.notes = []
-        self.ticks_per_beat = midi_file.ticks_per_beat
+        self.ticks_per_beat = midi_data.resolution
         self.tempo = 500000  # Default MIDI tempo (500,000 microseconds per beat)
+        self._initialize_tempo()
+
+    def _initialize_tempo(self):
+        if self.midi_data.get_tempo_changes()[1].size > 0:
+            self.tempo = self.midi_data.get_tempo_changes()[1][0]  # Get the first tempo change
 
     def read_notes(self):
-        track = self.midi_file.tracks[self.track_id]
-        time_elapsed = 0
-        current_notes = {}
+        instrument = self.midi_data.instruments[self.track_id]
+        sorted_notes = sorted(instrument.notes, key=lambda note: note.start)
+        prev_start = float(sorted_notes[0].start)
+        for note in instrument.notes:
+            start = float(note.start)
+            end = float(note.end)
+            proposal = {
+                'start': start,
+                'end': end, 
+                'pitch': int(note.pitch),
+                'step': start-prev_start,
+                'duration': end-start,
+            }
+            self.notes.append(proposal)
+            prev_start = start
 
-        for msg in track:
-            if msg.type == 'set_tempo':
-                self.tempo = msg.tempo
-            if msg.time > 0:
-                time_elapsed += msg.time
-
-            if msg.type == 'note_on' and msg.velocity > 0:
-                note_info = {
-                    'note': msg.note,
-                    'start_time': self._convert_to_quarter_length(time_elapsed),
-                    'velocity': msg.velocity,
-                    'channel': msg.channel
-                }
-                current_notes[msg.note] = note_info
-
-            elif (msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0)) and msg.note in current_notes:
-                start_time = current_notes[msg.note]['start_time']
-                duration = self._convert_to_quarter_length(time_elapsed) - start_time
-                self.notes.append({
-                    'note': msg.note,
-                    'start_time': start_time,
-                    'duration': duration,
-                    'velocity': current_notes[msg.note]['velocity'],
-                    'channel': current_notes[msg.note]['channel']
-                })
-                del current_notes[msg.note]
-        
-    def _convert_to_quarter_length(self, ticks):
-        quarter_length = (ticks / self.ticks_per_beat) * (self.tempo / 1000000.0)
+    def _convert_to_quarter_length(self, time_in_seconds):
+        quarter_length = (time_in_seconds * 1e6) / self.tempo
         return quarter_length
 
     def get_notes(self):
