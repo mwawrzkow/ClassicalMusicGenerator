@@ -22,16 +22,6 @@ from utils import cls
 from midi import Midis
 key_order = ['pitch', 'step', 'duration']
 
-def normalize_data(data, min_value=0, max_value=127, scale_min=-1, scale_max=1):
-    """Normalize data to be between scale_min and scale_max."""
-    data_min = np.min(data)
-    data_max = np.max(data)
-    return scale_min + (data - data_min) * (scale_max - scale_min) / (data_max - data_min)
-
-def denormalize_data(data, original_min=0, original_max=127, scale_min=-1, scale_max=1):
-    """Denormalize data from scale_min and scale_max back to original range."""
-    return original_min + (data - scale_min) * (original_max - original_min) / (scale_max - scale_min)
-
 def midi_to_notes(midi_file: str) -> pd.DataFrame:
   pm = pretty_midi.PrettyMIDI(midi_file)
   if len(pm.instruments) == 0:
@@ -78,18 +68,21 @@ def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
     data = np.stack([all_notes[key] for key in key_order], axis=1)
     data = np.array(data)
     # normalize note pitch
-    data[:, 0] = normalize_data(data[:, 0])
     dataset = tf.data.Dataset.from_tensor_slices(data)
     return dataset, len(data)
+import tensorflow as tf
+
 def create_sequences_tf(
     dataset: tf.data.Dataset, 
     seq_length: int,
-    vocab_size = 128,
+    vocab_size=128,
 ) -> tf.data.Dataset:
-    """Returns TF Dataset of sequence and label examples."""
-    seq_length = seq_length + 1
+    """Returns TF Dataset of sequences with no labels."""
 
-    # Take 1 extra for the labels
+    # Adjust seq_length to include the full sequence length
+    seq_length = seq_length
+
+    # Create sliding windows of sequence length across the dataset
     windows = dataset.window(seq_length, shift=1, stride=1, drop_remainder=True)
 
     # `flat_map` flattens the" dataset of datasets" into a dataset of tensors
@@ -101,17 +94,9 @@ def create_sequences_tf(
         x = x / [vocab_size, 1.0, 1.0]
         return x
 
-    # Define key order for labels
+    # Return scaled sequences
+    return sequences.map(scale_pitch, num_parallel_calls=tf.data.AUTOTUNE)
 
-    # Split the labels
-    def split_labels(sequences):
-        inputs = sequences[:-1]
-        labels_dense = sequences[-1]
-        labels = {key: labels_dense[i] for i, key in enumerate(key_order)}
-
-        return scale_pitch(inputs), labels
-
-    return sequences.map(split_labels, num_parallel_calls=tf.data.AUTOTUNE)
 
 
 def generate_sequence(model: GAN, seed_sequence: int, length:int, filename: str,  temperature=2.0):
@@ -128,19 +113,12 @@ def generate_sequence(model: GAN, seed_sequence: int, length:int, filename: str,
     prev_start = 0
     data = model.generate_data(1).numpy()
 
+    # assume data in format         fake_data = tf.concat([fake_data['pitch'], fake_data['step'], fake_data['duration']], axis=-1)
     # denormalize pitch
-    # data[:, 0] = denormalize_data(data[:, 0])
-    # abs on pitch
-    # data[:, 0] = np.abs(data[:, 0])
-
-    # Ensure the data is properly reshaped/processed if necessary
-    # For example, if data comes out as (512, sequence_length, 3)
-    # Ensure it is correctly handled
-
+    # data = data * np.array([128, 1, 1])
     notes = [] 
     for i in range(len(data[0])):
         notes.append({key: data[0][i][j] for j, key in enumerate(key_order)})
-
     data = pd.DataFrame(notes, columns=['pitch', 'step', 'duration'])
     
     return data 
@@ -159,6 +137,8 @@ def notes_to_midi(
 
   prev_start = 0
   generated_notes = []
+#   get first row
+  
   for i, note in notes.iterrows():
     start = float(prev_start + note['step'])
     end = float(start + note['duration'])
@@ -176,6 +156,36 @@ def notes_to_midi(
   pm.write(out_file)
   return pm
 
+def inspect_batch(dataset, seq_length, output_dir):
+    # Take one batch from the dataset
+    for batch in dataset.take(1):
+        print("Batch shape:", batch.shape)
+        print("First sequence in the batch:")
+        print(batch[0].numpy())  # Convert to numpy for easy inspection
+
+        # Check normalization range
+        print("Pitch range in batch:", batch[:, :, 0].numpy().min(), batch[:, :, 0].numpy().max())
+        print("Step range in batch:", batch[:, :, 1].numpy().min(), batch[:, :, 1].numpy().max())
+        print("Duration range in batch:", batch[:, :, 2].numpy().min(), batch[:, :, 2].numpy().max())
+
+        # Validate the sequence length
+        assert batch.shape[1] == seq_length, f"Expected sequence length {seq_length}, but got {batch.shape[1]}"
+
+        # Validate that pitch is in range 0 to 1 (after normalization)
+        # assert batch[:, :, 0].numpy().min() >= 0 and batch[:, :, 0].numpy().max() <= 1, "Pitch values out of expected range [0, 1]"
+
+        # Convert the first sequence in the batch to MIDI format
+        notes_df = pd.DataFrame(batch[0].numpy(), columns=['pitch', 'step', 'duration'])
+
+        # Denormalize the pitch to MIDI range (0 to 127)
+        notes_df['pitch'] = notes_df['pitch'] * 128
+        notes_df['pitch'] = notes_df['pitch'].astype(int)  # Ensure pitch values are integers
+
+        # Save the sequence to a MIDI file
+        output_file = os.path.join(output_dir, 'validation_output.mid')
+        notes_to_midi(notes_df, output_file, 'Acoustic Grand Piano')
+
+        print(f"Saved validation output to {output_file}")
 
 def run(args):
     cls()
@@ -194,19 +204,21 @@ def run(args):
         print("Loaded dataset")
         print("Shuffling dataset...")
         dataset = tf_dataset.shuffle(buffer_size=size // args.seq_length).batch(args.batch_size, drop_remainder=True)
+        # take one from dataset and save it to midi to check if it is correct
+        inspect_batch(dataset, args.seq_length, args.output)
         g_o_d = (args.seq_length,3)
         d_i_d = deepcopy(g_o_d)
         gan = GAN((args.seq_length,3),g_o_d, d_i_d, False)
-        gan.train(dataset, args.epochs)
-        gan.save('model_data/rnn.keras')
+        gan.train(dataset, args.epochs, batch_size=args.batch_size)
+        gan.save('model_data/gan.keras')
     midi_files = glob.glob(str(path/'*.mid*'))
     # check if the output directory exists
     if not os.path.exists(args.output):
         os.mkdir(args.output)
-    for n in range(args.num_generations):
+    for n in tqdm(range(args.num_generations), desc="Generating MIDI files"):
         print(f"Generating sequence {n+1}...")
         random_file = random.choice(midi_files)
         seed_sequence = midi_to_notes(random_file)
         generated_notes = generate_sequence(gan, seed_sequence, args.length, random_file)
         print(f"Generated sequence {n+1}")
-        notes_to_midi(generated_notes, f"output/generated_{n+1}.mid", "Acoustic Grand Piano")
+        notes_to_midi(generated_notes, f"{args.output}/generated_{n+1}.mid", "Acoustic Grand Piano")

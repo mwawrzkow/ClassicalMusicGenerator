@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, Sequential, Model, mixed_precision
-from tensorflow.keras.layers import LSTM, Dense, LeakyReLU, Bidirectional, BatchNormalization, Reshape, Input, Flatten, LayerNormalization, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Input, Flatten, GRU, LeakyReLU, Bidirectional
 from tensorflow.keras.optimizers.schedules import ExponentialDecay
 
 
@@ -32,13 +32,18 @@ if not tf.config.list_physical_devices('GPU'):
     raise RuntimeError("No GPU found, can't continue.")
 
 # enable jit compilation
-tf.config.optimizer.set_jit(True)
+tf.config.optimizer.set_jit("autoclustering")
 # policy = mixed_precision.Policy('mixed_float16')
 # mixed_precision.set_global_policy(policy)
 
 # tf.config.optimizer.set_jit('autoclustering')
 logdir = None
 tensorboard_callback = None
+@tf.keras.utils.register_keras_serializable()
+def mse_with_positive_pressure(y_true: tf.Tensor, y_pred: tf.Tensor):
+  mse = (y_true - y_pred) ** 2
+  positive_pressure = 10 * tf.maximum(-y_pred, 0.0)
+  return tf.reduce_mean(mse + positive_pressure)
 class GAN(BaseModel):
     """
     Generative Adversarial Network (GAN) class.
@@ -87,14 +92,18 @@ class GAN(BaseModel):
         
         # LSTM with return_sequences=True to maintain sequence length
         x = LSTM(256, return_sequences=True)(inputs)  # Ensure return_sequences=True to produce a sequence
+        x = LeakyReLU(alpha=0.2)(x)
+        x = LSTM(64, return_sequences=True)(x)
+        
         
         # Output layers
         pitch_output = Dense(128, activation='softmax',kernel_initializer='he_normal', name='pitch')(x)
-        step_output = Dense(1, kernel_initializer='he_normal',name='step')(x)
-        duration_output = Dense(1, kernel_initializer='he_normal', name='duration')(x)
+        step_output = Dense(1, activation='sigmoid', kernel_initializer='he_normal', name='step')(x)
+        duration_output = Dense(1, activation='sigmoid', kernel_initializer='he_normal', name='duration')(x)
+    
         
         # Build the model
-        self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.001, beta_1=0.5, beta_2=0.9)
+        self.generator_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, beta_1=0.5, beta_2=0.9)
         outputs = {
             'pitch': pitch_output,
             'step': step_output,
@@ -102,67 +111,35 @@ class GAN(BaseModel):
         }
 
         model = Model(inputs, outputs)
-        loss = {
-        'pitch': tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
-        'step': tf.keras.losses.MeanSquaredError(),
-        'duration': tf.keras.losses.MeanSquaredError(),
-    }
         model.summary()
 
-        model.compile(
-            optimizer=self.generator_optimizer,
-            loss=loss,
-            loss_weights={
-                'pitch': 1.0,
-                'step': 1.0,
-                'duration': 1.0,
-            })
+        model.compile(optimizer=self.generator_optimizer)
         return model
         
     def build_discriminator(self):
-        model = Sequential()
-        model.add(Input(shape=(self.discriminator_output_dim[0], 3)))  # 3 channels for pitch, step, and duration
-        model.add(LSTM(128))
-        model.add(Flatten())
-        model.add(Dense(128, kernel_initializer='he_normal'))
-        model.add(Dense(1, activation='linear', kernel_initializer='he_normal'))  # Binary classification output
+        inputs = Input(shape=(self.discriminator_output_dim[0], 3))  # 3 channels for pitch, step, and duration
+        x = LSTM(128, return_sequences=True)(inputs)
+        x = LeakyReLU(alpha=0.2)(x)
+        x = LSTM(32)(x)
+        x = Dense(1, kernel_initializer='he_normal')(x)
+        model = Model(inputs, x)
         model.summary()
-        self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001, beta_1=0.5, beta_2=0.9)
+        self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, beta_1=0.5, beta_2=0.9)
         model.compile(optimizer=self.critic_optimizer)
         return model
-        
-    def normalize_data(self, data, min_val=-1, max_val=1):
-        """Normalize data to be between min_val and max_val."""
-        data_min = tf.reduce_min(data)
-        data_max = tf.reduce_max(data)
-        return min_val + (data - data_min) * (max_val - min_val) / (data_max - data_min)
-    
-    def generate_increasing_start_times(self, batch_size):
-        """Generate start times in increasing order between -1 and 1."""
-        start_times = np.sort(np.random.uniform(-1, 1, batch_size))
-        return tf.convert_to_tensor(start_times, dtype=tf.float32)
 
     def generate_data(self, num_samples):
-        noise = self.generate_noise(num_samples)
-        fake_data = self.generator(noise, training=False)
+        fake_data = self.generator(self.generate_noise(num_samples), training=False)
+        # Compute the weighted sum of the pitch logits to get a differentiable approximation of the pitch
+        pitch_range = tf.range(128, dtype=tf.float32)  # Assuming 128 possible pitch values
+        fake_data_notes = tf.reduce_sum(fake_data['pitch'] * pitch_range, axis=-1, keepdims=True)
+        # ensure fake_data_notes is int
+        fake_data_notes = tf.cast(fake_data_notes, tf.int32)
+        fake_data_notes = tf.cast(fake_data_notes, tf.float32)
+        # Concatenate pitch, step, and duration for the critic input
+        fake_data = tf.concat([fake_data_notes, fake_data['step'], fake_data['duration']], axis=-1)
         
-        # Get the index of the maximum logit (the most probable pitch)
-        pitch = tf.argmax(fake_data['pitch'], axis=-1)
-        
-        # Convert pitch to the desired range [0, 127]
-        pitch = tf.clip_by_value(tf.cast(pitch, tf.int32), 0, 127)
-        
-        # Ensure step and duration are non-negative
-        step = tf.maximum(0.0, tf.squeeze(fake_data['step'], axis=-1))
-        duration = tf.maximum(0.0, tf.squeeze(fake_data['duration'], axis=-1))
-        
-        # Convert pitch to float32 to match step and duration data types
-        pitch = tf.cast(pitch, tf.float32)
-        
-        # Combine outputs into a single array with shape (num_samples, sequence_length, 3)
-        generated_data = tf.stack([pitch, step, duration], axis=-1)
-        
-        return generated_data
+        return fake_data
 
         
     def generate_real_batch(self, real_data, batch_size):
@@ -188,183 +165,197 @@ class GAN(BaseModel):
 
     @tf.function
     def gradient_penalty(self, real_data, fake_data, batch_size):
-        epsilon = tf.random.uniform(shape=[batch_size, 1,], minval=0.0, maxval=1)
-        interpolated = epsilon * tf.cast(real_data, tf.float32) + ((1 - epsilon) * fake_data)
-        
-        with tf.GradientTape() as gp_tape:
-            gp_tape.watch(interpolated)
+        epsilon = tf.random.uniform([batch_size, 1, 1], 0.0, 1.0)
+        interpolated = epsilon * tf.cast(real_data, tf.float32) + (1 - epsilon) * fake_data
+
+        with tf.GradientTape() as tape:
+            tape.watch(interpolated)
             interpolated_scores = self.critic(interpolated, training=True)
-        
-        gradients = gp_tape.gradient(interpolated_scores, [interpolated])[0]
-        gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
+
+        gradients = tape.gradient(interpolated_scores, interpolated)
+        gradients = tf.clip_by_value(gradients, -1.0, 1.0)
         grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
         gradient_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0))
-        
+
         return gradient_penalty
-
-
     @tf.function
-    def train_critic_Interpolated(self, real_data, batch_size): 
-        lambda_lp = 4.0
-        mcritic_loss = []
-        
-        # for _ in range(5):
-        noise = self.generate_noise(batch_size)
-        fake_data = self.generator(noise, training=False)
-        
-        # Generate interpolated data
-        epsilon = tf.random.uniform(shape=[batch_size, 1], minval=0.0, maxval=1.0)
-        interpolated = epsilon * real_data + (1 - epsilon) * fake_data
-        
-        with tf.GradientTape() as tape:
-            # real_scores = self.critic(real_data, training=True)
-            # fake_scores = self.critic(fake_data, training=True)
-            
-            # Compute the Lipschitz penalty for interpolated data
-            lipschitz_penalty_value = self.lipschitz_penalty(interpolated)
-            
-            # Critic loss
-            critic_loss = (-tf.reduce_mean(interpolated) * epsilon) + lambda_lp * lipschitz_penalty_value
-
-            gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
-            gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]  # Gradient clipping
-            mcritic_loss.append(critic_loss)
-            self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
-        
-        return mcritic_loss
-    @tf.function
-    def calculate_penalty(self, data, ndims = 2):
-        # Assuming `data` is a tuple where the first element is the tensor you need
-        tensor_data = data[0]  # Extract the tensor part of the tuple
-        duration = []
-        if ndims == 3:
-            duration = tensor_data[:, :, 2]  # Correctly index the duration field
-        else:
-            duration = tensor_data[:, 2]
-        long_note_threshold = 1.0  # Define a threshold for long notes
-        long_notes = tf.greater(duration, long_note_threshold)
-        penalty_factor = tf.where(long_notes, 2.0, 1.0)  # Apply higher penalty to long notes
-        penalty_factor = tf.reshape(penalty_factor, [-1, 1])  # Reshape to be broadcastable with grad_norm
-        return penalty_factor
-
-    # should be uncommented 
-    @tf.function 
     def train_critic_realData(self, real_data):
-        lambda_lp = 5.0
+        lambda_lp = tf.constant(15.0, dtype=tf.float32)
         mcritic_loss = []
-
-        penalty_factor = self.calculate_penalty(real_data)
-
-
+        with tf.GradientTape() as penalty_tape:
+            penalty_tape.watch(real_data)
+            real_scores_penalty = self.critic(real_data, training=True)
         with tf.GradientTape() as tape:
-            tape.watch(real_data[0])
-            real_scores = self.critic(real_data[0], training=True)
-            grad_norm = tf.sqrt(tf.reduce_sum(tf.square(real_scores), axis=[1]))
-            lipschitz_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0) + tf.square(grad_norm - 1.0) * penalty_factor)
-            critic_loss = -tf.reduce_mean(real_scores) + lambda_lp * lipschitz_penalty  # Compute the critic loss
+            real_scores = self.critic(real_data, training=True)
+            critic_loss = tf.reduce_mean(real_scores)
 
-        gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
-        clipped_gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
-        clipped_gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
+            gradients = penalty_tape.gradient(real_scores_penalty, real_data)
+            grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
+            lipschitz_penalty = tf.reduce_mean(tf.square(tf.clip_by_value(grad_norm - 1.0, 0.0, np.infty)))
+            # convert lipschitz_penalty to float32
+            lipschitz_penalty = tf.cast(lipschitz_penalty, tf.float32)
+            total_loss = critic_loss + lambda_lp * lipschitz_penalty
 
-        self.critic_optimizer.apply_gradients(zip(clipped_gradients, self.critic.trainable_variables))
-        mcritic_loss.append(critic_loss)
+
+            # Combine critic loss with the Lipschitz penalty
+
+        # Compute gradients of the total loss with respect to the critic's trainable variables
+        gradients = tape.gradient(total_loss, self.critic.trainable_variables)
+        gradients = [tf.clip_by_value(g, -1.0, 1.0) for g in gradients]  # Example of tighter clipping
+
+
+        # Apply the gradients to update the critic's weights
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+
+        # Accumulate the loss
+        mcritic_loss.append(total_loss)
 
         return mcritic_loss
+    @tf.function
+    def train_critic_interpolated(self, real_data, batch_size):
+        lambda_lp = tf.constant(15.0, dtype=tf.float32)
+        mcritic_loss = []
+
+        # Generate fake data from the generator
+        fake_data = self.generator(self.generate_noise(batch_size), training=False)
+        pitch_range = tf.range(128, dtype=tf.float32)
+        fake_data_notes = tf.reduce_sum(fake_data['pitch'] * pitch_range, axis=-1, keepdims=True)
+        fake_data_notes = fake_data_notes / 127.0
+        fake_data = tf.concat([fake_data_notes, fake_data['step'], fake_data['duration']], axis=-1)
+
+        # Interpolate between real and fake data
+        epsilon = tf.random.uniform([batch_size, 1, 1], 0.0, 1.0)
+        interpolated_data = epsilon * tf.cast(real_data, tf.float32) + (1 - epsilon) * fake_data
+        with tf.GradientTape() as penalty_tape:
+            penalty_tape.watch(interpolated_data)
+            interpolated_scores_penalty = self.critic(interpolated_data, training=True)
+            
+        
+        with tf.GradientTape() as tape:
+            real_scores_interpolated = self.critic(interpolated_data, training=True)
+
+            critic_loss = -tf.reduce_mean(real_scores_interpolated)
+
+            gradients = penalty_tape.gradient(interpolated_scores_penalty, interpolated_data)
+            grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
+            lipschitz_penalty = tf.reduce_mean(tf.square(tf.clip_by_value(grad_norm - 1.0, 0.0, np.infty)))
+            # convert lipschitz_penalty to float32
+            lipschitz_penalty = tf.cast(lipschitz_penalty, tf.float32)
+            total_loss = critic_loss + lambda_lp * lipschitz_penalty
+
+        # The total loss for the critic on the interpolated data
+
+        # Compute gradients of the total loss with respect to the critic's trainable variables
+        gradients = tape.gradient(total_loss, self.critic.trainable_variables)
+        
+        # Clip gradients to the specified range
+        gradients = [tf.clip_by_value(g, -1.0, 1.0) for g in gradients]
+
+        # Apply the gradients to update the critic's weights
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+
+        # Accumulate the loss
+        mcritic_loss.append(total_loss)
+
+        return mcritic_loss
+
 
     @tf.function
-    def train_critic_generatedData(self, batch_size):
-        lambda_lp = 6.0
-        mcritic_loss = []
-        # for _ in range(3):
-        # noise = self.generate_noise(batch_size)
-        fake_data = self.generator(self.generate_noise(batch_size), training=False)
-        # from generated batch get only notes that are the most probable
-        fake_data_notes = tf.argmax(fake_data['pitch'], axis=-1)
-        fake_data_notes = tf.clip_by_value(tf.cast(fake_data_notes, tf.int32), 0, 127)
-        fake_data_notes = tf.cast(fake_data_notes, tf.float32)
-        fake_data_notes = tf.expand_dims(fake_data_notes, axis=-1)  # Shape [512] -> [512, 1]
-
-        fake_data = tf.concat([fake_data_notes, fake_data['step'], fake_data['duration']], axis=-1)
-        # tf.print(tf.shape(fake_data))
-        penalty_factor = self.calculate_penalty(fake_data,2)
+    def train_critic_generatedData(self, real_data, batch_size):
+        lambda_lp = tf.constant(15.0, dtype=tf.float32)
+        
+        # Generate fake data
+        data = self.generator(self.generate_noise(batch_size), training=False)
+        pitch_range = tf.range(128, dtype=tf.float32)
+        fake_data_notes = tf.reduce_sum(data['pitch'] * pitch_range, axis=-1, keepdims=True)
+        fake_data_notes = fake_data_notes / 127.0
+        fake_data = tf.concat([fake_data_notes, data['step'], data['duration']], axis=-1)
+        
+        # Interpolate between real and fake data
+        epsilon = tf.random.uniform([batch_size, 1, 1], 0.0, 1.0)
+        interpolated_data = epsilon * tf.cast(real_data, tf.float32) + (1 - epsilon) * fake_data
 
         with tf.GradientTape() as tape:
-            tape.watch(fake_data)
-            real_scores = self.critic(fake_data, training=True)
-            grad_norm = tf.sqrt(tf.reduce_sum(tf.square(real_scores), axis=[1]))
-            lipschitz_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0)* penalty_factor)
-            critic_loss = -tf.reduce_mean(real_scores) + lambda_lp * lipschitz_penalty  # Compute the critic loss
+            # Calculate the critic's scores
+            real_scores = self.critic(real_data, training=True)
+            fake_scores = self.critic(fake_data, training=True)
+            critic_loss =  tf.reduce_mean(fake_scores) - tf.reduce_mean(real_scores)
+        
+        # Compute gradient penalty
+            with tf.GradientTape() as penalty_tape:
+                penalty_tape.watch(interpolated_data)
+                interpolated_scores = self.critic(interpolated_data, training=True)
+            
+            gradients = penalty_tape.gradient(interpolated_scores, interpolated_data)
+            grad_norm = tf.sqrt(tf.reduce_sum(tf.square(gradients), axis=[1]))
+            lipschitz_penalty = tf.reduce_mean(tf.square(grad_norm - 1.0))
+            
+            # Combine the loss with the gradient penalty
+            total_loss = critic_loss + lambda_lp * lipschitz_penalty
 
-        gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
-        # Filter out None gradients and apply tf.clip_by_value only to valid gradients
-        clipped_gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
-        # valid_gradients = [(grad, var) for grad, var in zip(clipped_gradients, self.critic.trainable_variables) if grad is not None]
-        # clipped_gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gradients]
-        clipped_gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
-        self.critic_optimizer.apply_gradients(zip(clipped_gradients, self.critic.trainable_variables))
-        mcritic_loss.append(critic_loss)
-        return mcritic_loss
-
+        # Apply gradients to the critic's weights
+        gradients = tape.gradient(total_loss, self.critic.trainable_variables)
+        gradients = [tf.clip_by_value(g, -1.0, 1.0) for g in gradients]
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
+        
+        return total_loss
     # should be uncommented
     @tf.function
     def generator_train_step(self, batch_size):      
         with tf.GradientTape() as tape:
+            # Generate fake data from the generator
             fake_data = self.generator(self.generate_noise(batch_size), training=True)
-            pitch_range = tf.range(128, dtype=tf.float32)
+            
+            # # Compute the weighted sum of the pitch logits to get a differentiable approximation of the pitch
+            pitch_range = tf.range(128, dtype=tf.float32)  # Assuming 128 possible pitch values
             fake_data_notes = tf.reduce_sum(fake_data['pitch'] * pitch_range, axis=-1, keepdims=True)
             
-            # Concatenate with step and duration
-            fake_data = tf.concat([fake_data_notes, fake_data['step'], fake_data['duration']], axis=-1)
-            generated_scores = self.critic(fake_data, training=False)
-            gen_loss = -tf.reduce_mean(generated_scores)
-        # gen_gradients = self.generator_loss(generated_scores, tf.ones_like(generated_scores))
-        gen_gradients = tape.gradient(gen_loss, self.generator.trainable_variables)
-        # gen_gradients = [tf.clip_by_value(grad, -1.0, 1.0) for grad in gen_gradients]
-        self.generator_optimizer.apply_gradients(zip(gen_gradients, self.generator.trainable_variables))
-        return gen_loss
-    # @tf.function
-    def train_step(self, real_data):
-        batch_size = 512
-        crit_losses = []
-        # Train the critic with real data
-        for _ in range(5):
-            real_critic_loss = self.train_critic_realData(real_data)
+            # Normalize the pitch values to [0, 1] range
+            fake_data_notes = fake_data_notes / 127.0  # Since pitch values range from 0 to 127
             
-            # Train the critic with generated data
-            generated_critic_loss = self.train_critic_generatedData(batch_size)
-            crit_losses.extend(real_critic_loss)
-            crit_losses.extend(generated_critic_loss)
+            # Concatenate pitch, step, and duration for the critic input
+            fake_data = tf.concat([fake_data_notes, fake_data['step'], fake_data['duration']], axis=-1)
+            
+            # Compute the critic's output for the generated data
+            generated_scores = self.critic(fake_data, training=False)
+            
+            # The generator aims to minimize the negative of the critic's output (Wasserstein loss)
+            gen_loss = -tf.reduce_mean(generated_scores)
         
-        # Train the critic with interpolated data
-        # interpolated_critic_loss = self.train_critic_Interpolated(real_data, batch_size)
+        # Compute the gradients of the generator loss with respect to the generator's trainable variables
+        gen_gradients = tape.gradient(gen_loss, self.generator.trainable_variables)
+        
+        # Apply the gradients to update the generator's weights
+        self.generator_optimizer.apply_gradients(zip(gen_gradients, self.generator.trainable_variables))
+        
+        return gen_loss
 
-        # Train the generator
+    @tf.function
+    def train_step(self, real_data, batch_size=4):
+        # crit_losses = self.train_critic_realData(real_data)
+        crit_losses = self.train_critic_generatedData(real_data, batch_size)
+        # crit_losses.extend(self.train_critic_interpolated(real_data, batch_size))
         gen_loss = self.generator_train_step(batch_size)
-        
-        return gen_loss, crit_losses#+ interpolated_critic_loss
+        return gen_loss, crit_losses
+    
     # @tf.function(jit_compile=True)
-    def train_epoch(self, dataset: tf.data.Dataset):
+    def train_epoch(self, dataset: tf.data.Dataset, batch_size=4):
         epoch_gen_loss = []
         epoch_disc_loss = []
         print("Training...")
         dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
         for real_batch in tqdm(dataset):
-            gen_loss, disc_loss = self.train_step(real_batch)
+            gen_loss, disc_loss = self.train_step(real_batch, batch_size)
             epoch_gen_loss.append(gen_loss)
-            epoch_disc_loss.extend(disc_loss)
-            for loss in disc_loss: 
-                with self.train_summary_writer.as_default(): 
-                    tf.summary.scalar('Discriminator Loss', loss, step=self.train_step_counter)
-                self.train_step_counter.assign_add(1)        
+            epoch_disc_loss.append(disc_loss) 
+            with self.train_summary_writer.as_default(): 
+                    tf.summary.scalar('Discriminator Loss', disc_loss, step=self.train_step_counter)
             with self.train_summary_writer.as_default():
-                tf.summary.scalar('Generator Loss', gen_loss, step=self.train_step_counter)
-                self.train_summary_writer.flush()
-            
+                tf.summary.scalar('Generator Loss', gen_loss, step=self.train_step_counter)            
             self.train_step_counter.assign_add(1)
-        return epoch_gen_loss, epoch_disc_loss, self.generator(self.generate_noise(512), training=False)
+        return epoch_gen_loss, epoch_disc_loss
 
-    def train(self, dataset, num_epochs, patience=10):
+    def train(self, dataset, num_epochs, patience=10, batch_size=4):
         if self.load:
             print("Model loaded, skipping training")
             return
@@ -377,9 +368,9 @@ class GAN(BaseModel):
         # profiler.start(logdir)
         actual_epochs = 0
         for epoch in range(num_epochs):
-            epoch_gen_loss, epoch_disc_loss, generated_data = self.train_epoch(dataset)
-            generator_generated_data.append(generated_data)
-            
+            epoch_gen_loss, epoch_disc_loss = self.train_epoch(dataset, batch_size)
+            self.train_summary_writer.flush()
+
             avg_gen_loss = np.mean(epoch_gen_loss)
             avg_disc_loss = np.mean(epoch_disc_loss)
             print(f"Epoch {epoch}: Generator Loss = {avg_gen_loss}, Discriminator Loss = {avg_disc_loss}")

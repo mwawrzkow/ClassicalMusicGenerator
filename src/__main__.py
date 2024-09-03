@@ -8,7 +8,7 @@ parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to
 parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
 parser.add_argument('--dataset', type=str, default='dataset', help='Path to the directory containing the midi files')
 parser.add_argument('--checkpoint', type=str, default=None, help='Path to the checkpoint to load')
-parser.add_argument('--num_files', type=int, default=100, help='Number of files to load')
+parser.add_argument('--num_files', type=int, default=None, help='Number of files to load')
 parser.add_argument('--seq_length', type=int, default=100, help='Sequence length')
 parser.add_argument('--output', type=str, default='output', help='Path to the output directory')
 parser.add_argument('--seed', type=str, default=None, help='Path to the seed sequence')
@@ -24,6 +24,8 @@ if __name__ == '__main__':
     if not os.path.exists(args.dataset):
         print(f"Directory {args.dataset} does not exist")
         sys.exit(1)
+    if args.num_files is None:
+        args.num_files = len(os.listdir(args.dataset))
     # check if the output directory exists
     if not os.path.exists(args.output):
         os.mkdir(args.output)
