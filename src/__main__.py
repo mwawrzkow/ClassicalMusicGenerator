@@ -16,7 +16,7 @@ parser.add_argument('--length', type=int, default=100, help='Length of the gener
 parser.add_argument('--temperature', type=float, default=2.0, help='Temperature for sampling')
 parser.add_argument('--gan', type=str, default='gan', help='Type of GAN to use: rnn, gan, wgan-gp, wgan-lgp')
 parser.add_argument('--num_generations', type=int, default=1, help='Number of midi files to create')
-
+parser.add_argument('--continue_training', type=bool, default=False, help='Continue training from the checkpoint')
 if __name__ == '__main__':
     args = parser.parse_args()
     # perform checking the arguments

@@ -20,7 +20,8 @@ import sys
 from network_gan import GAN
 from utils import cls
 from midi import Midis
-key_order = ['pitch', 'step', 'duration']
+import matplotlib.pyplot as plt
+key_order = ['pitch', 'step', 'duration', 'velocity']
 
 def midi_to_notes(midi_file: str) -> pd.DataFrame:
   pm = pretty_midi.PrettyMIDI(midi_file)
@@ -41,32 +42,43 @@ def midi_to_notes(midi_file: str) -> pd.DataFrame:
     notes['end'].append(end)
     notes['step'].append(start - prev_start)
     notes['duration'].append(end - start)
+    notes['velocity'].append(note.velocity)
     prev_start = start
   return pd.DataFrame({name: np.array(value) for name, value in notes.items()})
 def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
     filenames = glob.glob(str(directory/'*.mid*'))
     all_notes = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        futures = []
+    num_files = len(filenames) if num_files is None else num_files
+    if num_files > 30:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = []
+            for f in tqdm(filenames[:num_files], desc="Processing MIDI files"):
+                try:
+                    future = executor.submit(midi_to_notes, f)
+                    futures.append(future)
+                except Exception as e:
+                    print(f"Error processing {f}: {e}")
+
+            all_notes = []
+            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing MIDI files"):
+                try:
+                    notes = future.result()
+                    all_notes.append(notes)
+                except Exception as e:
+                    print(f"Error processing MIDI file: {e}")
+    else:
         for f in tqdm(filenames[:num_files], desc="Processing MIDI files"):
             try:
-                future = executor.submit(midi_to_notes, f)
-                futures.append(future)
-            except Exception as e:
-                print(f"Error processing {f}: {e}")
-
-        all_notes = []
-        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing MIDI files"):
-            try:
-                notes = future.result()
+                notes = midi_to_notes(f)
                 all_notes.append(notes)
             except Exception as e:
-                print(f"Error processing MIDI file: {e}")
+                print(f"Error processing {f}: {e}")
     all_notes = pd.concat(all_notes)
     n_notes = len(all_notes)
     print('Number of notes parsed:', n_notes)
     data = np.stack([all_notes[key] for key in key_order], axis=1)
     data = np.array(data)
+    data = data.astype(np.float32)
     # normalize note pitch
     dataset = tf.data.Dataset.from_tensor_slices(data)
     return dataset, len(data)
@@ -89,37 +101,42 @@ def create_sequences_tf(
     flatten = lambda x: x.batch(seq_length, drop_remainder=True)
     sequences = windows.flat_map(flatten)
 
-    # Normalize note pitch
-    def scale_pitch(x):
-        x = x / [vocab_size, 1.0, 1.0]
-        return x
+    def one_hot_and_normalize(x):
+        pitch = x[:, 0]  # Extract pitch values (shape: [seq_length])
+        step = x[:, 1]   # Extract step values (shape: [seq_length])
+        duration = x[:, 2]  # Extract duration values (shape: [seq_length])
+        velocity = x[:, 3]  # Extract velocity values (shape: [seq_length])
+        # One-hot encode the pitch values
+        pitch_one_hot = tf.one_hot(tf.cast(pitch, tf.int32), depth=vocab_size)
+
+        # Stack pitch (one-hot), step, and duration into the same tensor
+        step = tf.expand_dims(step, -1)  # Ensure step has shape [seq_length, 1]
+        duration = tf.expand_dims(duration, -1)  # Ensure duration has shape [seq_length, 1]
+        velocity = tf.expand_dims(velocity, -1)  # Ensure velocity has shape [seq_length, 1]
+
+        # Concatenate along the last axis: [seq_length, pitch_depth + 1 + 1]
+        return tf.concat([pitch_one_hot, step, duration, velocity], axis=-1)
 
     # Return scaled sequences
-    return sequences.map(scale_pitch, num_parallel_calls=tf.data.AUTOTUNE)
+    return sequences.map(one_hot_and_normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
 
 
 def generate_sequence(model: GAN, seed_sequence: int, length:int, filename: str,  temperature=2.0):
     raw_notes = midi_to_notes(filename)
 
-    temperature = 3.0
-    num_predictions = 1000
+    temperature = 1.0
 
     sample_notes = np.stack([raw_notes[key] for key in key_order], axis=1)
-    input_notes = (
-        sample_notes[:length] / np.array([128, 1, 1]))
-
-    generated_notes = []
-    prev_start = 0
-    data = model.generate_data(1).numpy()
+    data = model.generate_data(1, temperature).numpy()
 
     # assume data in format         fake_data = tf.concat([fake_data['pitch'], fake_data['step'], fake_data['duration']], axis=-1)
     # denormalize pitch
     # data = data * np.array([128, 1, 1])
     notes = [] 
     for i in range(len(data[0])):
-        notes.append({key: data[0][i][j] for j, key in enumerate(key_order)})
-    data = pd.DataFrame(notes, columns=['pitch', 'step', 'duration'])
+        notes.append({key_order[j]: data[0][i][j] for j in range(len(key_order))})
+    data = pd.DataFrame(notes, columns=['pitch', 'step', 'duration', 'velocity'])
     
     return data 
 
@@ -140,10 +157,10 @@ def notes_to_midi(
 #   get first row
   
   for i, note in notes.iterrows():
-    start = float(prev_start + note['step'])
+    start = float(prev_start + (note['step']/ 10 ))
     end = float(start + note['duration'])
     note = pretty_midi.Note(
-        velocity=velocity,
+        velocity=int(note['velocity']),
         pitch=int(note['pitch']),
         start=start,
         end=end,
@@ -152,6 +169,17 @@ def notes_to_midi(
     instrument.notes.append(note)
     prev_start = start
 
+#   save create plot with the notes
+# Create a plot of the notes
+  start_times = [note.start for note in generated_notes]
+  pitches = [note.pitch for note in generated_notes]
+  fig, ax = plt.subplots(figsize=(10, 6))
+  ax.scatter(start_times, pitches, c='blue', label='Notes')
+  ax.set_xlabel('Start Time')
+  ax.set_ylabel('Pitch')
+  ax.set_title('Generated Notes')
+  ax.legend()
+  plt.savefig(out_file.replace('.mid', '.png'))
   pm.instruments.append(instrument)
   pm.write(out_file)
   return pm
@@ -164,9 +192,8 @@ def inspect_batch(dataset, seq_length, output_dir):
         print(batch[0].numpy())  # Convert to numpy for easy inspection
 
         # Check normalization range
-        print("Pitch range in batch:", batch[:, :, 0].numpy().min(), batch[:, :, 0].numpy().max())
-        print("Step range in batch:", batch[:, :, 1].numpy().min(), batch[:, :, 1].numpy().max())
-        print("Duration range in batch:", batch[:, :, 2].numpy().min(), batch[:, :, 2].numpy().max())
+        print("Step range in batch:", batch[:, :, 128].numpy().min(), batch[:, :, 1].numpy().max())
+        print("Duration range in batch:", batch[:, :, 129].numpy().min(), batch[:, :, 2].numpy().max())
 
         # Validate the sequence length
         assert batch.shape[1] == seq_length, f"Expected sequence length {seq_length}, but got {batch.shape[1]}"
@@ -174,12 +201,25 @@ def inspect_batch(dataset, seq_length, output_dir):
         # Validate that pitch is in range 0 to 1 (after normalization)
         # assert batch[:, :, 0].numpy().min() >= 0 and batch[:, :, 0].numpy().max() <= 1, "Pitch values out of expected range [0, 1]"
 
-        # Convert the first sequence in the batch to MIDI format
-        notes_df = pd.DataFrame(batch[0].numpy(), columns=['pitch', 'step', 'duration'])
+        # get notes from hot encoded data
+        sequence = batch[0]  # Shape: [seq_length, 130]
 
-        # Denormalize the pitch to MIDI range (0 to 127)
-        notes_df['pitch'] = notes_df['pitch'] * 128
-        notes_df['pitch'] = notes_df['pitch'].astype(int)  # Ensure pitch values are integers
+        # Extract pitch, step, and duration from the selected sequence
+        pitch = sequence[:, :128]  # One-hot encoded pitch
+        pitch = tf.argmax(pitch, axis=-1).numpy()  # Get the actual pitch value (convert to numpy)
+        step = sequence[:, 128].numpy()  # Step value
+        duration = sequence[:, 129].numpy()  # Duration value
+        velocity = sequence[:, 130].numpy()  # Velocity value
+
+        # Stack pitch, step, and duration together
+        melody = np.stack([pitch, step, duration, velocity], axis=-1)  # Shape: [seq_length, 3]
+        
+        # Convert to DataFrame
+        notes_df = pd.DataFrame(melody, columns=['pitch', 'step', 'duration', 'velocity'])
+
+        # Optionally, denormalize the pitch to MIDI range (0 to 127)
+        # notes_df['pitch'] = notes_df['pitch'] * 128
+        # notes_df['pitch'] = notes_df['pitch'].astype(int)  # Ensure pitch values are integers
 
         # Save the sequence to a MIDI file
         output_file = os.path.join(output_dir, 'validation_output.mid')
@@ -187,34 +227,96 @@ def inspect_batch(dataset, seq_length, output_dir):
 
         print(f"Saved validation output to {output_file}")
 
+def getMinMaxValues(dataset, vocab_size=128):
+    """
+    Calculate the min and max values for one-hot encoded pitch, step, duration, and velocity from the dataset.
+
+    Arguments:
+    - dataset: A TensorFlow dataset containing the music data.
+    - vocab_size: The vocabulary size for one-hot encoded pitch (default: 128).
+
+    Returns:
+    - A dictionary with min and max values for pitch, step, duration, and velocity.
+    """
+    min_max = {
+        'step_min': float('inf'),
+        'step_max': float('-inf'),
+        'pitch_min': float('inf'),
+        'pitch_max': float('-inf'),
+        'duration_min': float('inf'),
+        'duration_max': float('-inf'),
+        'velocity_min': float('inf'),
+        'velocity_max': float('-inf')
+    }
+
+    for batch in tqdm(dataset, desc="Calculating fine tuning parameters"):
+        # One-hot encoded pitch is [batch_size, seq_length, vocab_size]
+        pitch_one_hot = batch[:, :, :vocab_size]
+        pitch = tf.argmax(pitch_one_hot, axis=-1).numpy()  # Convert one-hot to pitch indices
+
+        # Extract other features (step, duration, velocity)
+        step = batch[:, :, vocab_size].numpy()
+        duration = batch[:, :, vocab_size + 1].numpy()
+        velocity = batch[:, :, vocab_size + 2].numpy()
+
+        # Calculate min/max for pitch
+        pitch_min = np.min(pitch)
+        pitch_max = np.max(pitch)
+
+        # Calculate min/max for step, duration, and velocity
+        step_min = np.min(step)
+        step_max = np.max(step)
+        duration_min = np.min(duration)
+        duration_max = np.max(duration)
+        velocity_min = np.min(velocity)
+        velocity_max = np.max(velocity)
+
+        # Update the min/max values in the dictionary
+        min_max['step_min'] = min(min_max['step_min'], step_min)
+        min_max['step_max'] = max(min_max['step_max'], step_max)
+        min_max['pitch_min'] = min(min_max['pitch_min'], pitch_min)
+        min_max['pitch_max'] = max(min_max['pitch_max'], pitch_max)
+        min_max['duration_min'] = min(min_max['duration_min'], duration_min)
+        min_max['duration_max'] = max(min_max['duration_max'], duration_max)
+        min_max['velocity_min'] = min(min_max['velocity_min'], velocity_min)
+        min_max['velocity_max'] = max(min_max['velocity_max'], velocity_max)
+
+    return min_max
 def run(args):
     cls()
     print("selected gan")
     path = pathlib.Path(args.dataset)
-
+    g_o_d = (args.seq_length,3)
+    d_i_d = deepcopy(g_o_d)
+    print("Loading MIDI files...")
+    dataset, size = load_all_midi_files(pathlib.Path(args.dataset), args.num_files)
+    tf_dataset = create_sequences_tf(dataset, seq_length=args.seq_length)
+    print("Shuffling dataset...")
+    dataset = tf_dataset.shuffle(buffer_size=size // args.seq_length).batch(args.batch_size, drop_remainder=True)
+    print("Loaded dataset")
+    min_max = getMinMaxValues(dataset)
+    print("Min and Max values:")
+    print("Step Min:", min_max['step_min'], "Step Max:", min_max['step_max'])
+    print("Pitch Min:", min_max['pitch_min'], "Pitch Max:", min_max['pitch_max'])
+    print("Duration Min:", min_max['duration_min'], "Duration Max:", min_max['duration_max'])
+    print("Velocity Min:", min_max['velocity_min'], "Velocity Max:", min_max['velocity_max'])
     if args.checkpoint:
         print(f"Loading checkpoint from {args.checkpoint}")
-        gan = GAN((args.seq_length,3), 4)        
-        gan.load(args.checkpoint)
+        gan = GAN((args.seq_length,3),g_o_d, d_i_d, True, min_max, args.continue_training)       
+        # gan.load(args.checkpoint)
+        # gan.load("./")
         print("Loaded checkpoint")
     else: 
-        print("Loading MIDI files...")
-        dataset, size = load_all_midi_files(pathlib.Path(args.dataset), args.num_files)
-        tf_dataset = create_sequences_tf(dataset, seq_length=args.seq_length)
-        print("Loaded dataset")
-        print("Shuffling dataset...")
-        dataset = tf_dataset.shuffle(buffer_size=size // args.seq_length).batch(args.batch_size, drop_remainder=True)
         # take one from dataset and save it to midi to check if it is correct
         inspect_batch(dataset, args.seq_length, args.output)
-        g_o_d = (args.seq_length,3)
-        d_i_d = deepcopy(g_o_d)
-        gan = GAN((args.seq_length,3),g_o_d, d_i_d, False)
+        gan = GAN((args.seq_length,3),g_o_d, d_i_d, False, min_max, args.continue_training)
         gan.train(dataset, args.epochs, batch_size=args.batch_size)
         gan.save('model_data/gan.keras')
     midi_files = glob.glob(str(path/'*.mid*'))
     # check if the output directory exists
     if not os.path.exists(args.output):
         os.mkdir(args.output)
+    # gan = GAN((args.seq_length,3),g_o_d, d_i_d, True)
     for n in tqdm(range(args.num_generations), desc="Generating MIDI files"):
         print(f"Generating sequence {n+1}...")
         random_file = random.choice(midi_files)
