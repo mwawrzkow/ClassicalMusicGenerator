@@ -1,1 +1,1 @@
-pip install music21 tqdm matplotlib Tornado mido
+pip install music21 tqdm matplotlib Tornado mido pretty_midi

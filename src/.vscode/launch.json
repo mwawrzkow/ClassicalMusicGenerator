@@ -7,9 +7,16 @@
         {
             "name": "Python: main.py",
             "type": "python",
+            "gevent": true,
             "request": "launch",
             "program": "__main__.py",
             "console": "integratedTerminal",
+            // "args": [  --dataset midi --gan rnn --output test_2 --epochs 10 --dataset Chopin],
+            // --gan gan --epochs 150 --batch_size 32 --dataset midi --seq_length 50 --output otp --length 50 --temperature 1.0 --num_generations 50 --num_files 200 --checkpoint final
+            "args": ["--gan", "gan", "--epochs", "150", "--batch_size", "32", "--dataset", "midis_v1.2/midis", "--seq_length", "50", "--output", "otp_final_v2", "--length", "50", "--temperature", "1.0", "--num_generations", "100", "--num_files", "2",],
+            // "args": ["--gan", "rnn", "--output", "test_2", "--epochs", "150","--num_files","100", "--num_generations", "30", "--seq_length", "50", "--batch_size", "32", "--continue_training", "True"],
+            // -dataset Chopin --gan wgan-lgp --output test_2 --epochs 10 --num_files 10
+            // "args": ["--dataset", "Chopin", "--gan", "wgan-lgp", "--output", "test_2", "--epochs", "1", "--num_files", "10"],
             "justMyCode": false
         }
     ]

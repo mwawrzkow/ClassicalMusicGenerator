@@ -46,9 +46,32 @@ def midi_to_notes(midi_file: str) -> pd.DataFrame:
     prev_start = start
   return pd.DataFrame({name: np.array(value) for name, value in notes.items()})
 def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
+    min_max = {
+    'step_min': float('inf'),
+    'step_max': float('-inf'),
+    'pitch_min': float('inf'),
+    'pitch_max': float('-inf'),
+    'duration_min': float('inf'),
+    'duration_max': float('-inf'),
+    'velocity_min': float('inf'),
+    'velocity_max': float('-inf')
+    }
+
+    def update_min_max(notes):
+        # Update min/max values based on the notes DataFrame
+        min_max['pitch_min'] = min(min_max['pitch_min'], notes['pitch'].min())
+        min_max['pitch_max'] = max(min_max['pitch_max'], notes['pitch'].max())
+        min_max['step_min'] = min(min_max['step_min'], notes['step'].min())
+        min_max['step_max'] = max(min_max['step_max'], notes['step'].max())
+        min_max['duration_min'] = min(min_max['duration_min'], notes['duration'].min())
+        min_max['duration_max'] = max(min_max['duration_max'], notes['duration'].max())
+        min_max['velocity_min'] = min(min_max['velocity_min'], notes['velocity'].min())
+        min_max['velocity_max'] = max(min_max['velocity_max'], notes['velocity'].max())
+
     filenames = glob.glob(str(directory/'*.mid*'))
     all_notes = []
     num_files = len(filenames) if num_files is None else num_files
+    i = 0 
     if num_files > 30:
         with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = []
@@ -60,17 +83,23 @@ def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
                     print(f"Error processing {f}: {e}")
 
             all_notes = []
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing MIDI files"):
+            for future in concurrent.futures.as_completed(futures):
                 try:
                     notes = future.result()
                     all_notes.append(notes)
+                    update_min_max(notes)
+                    print(f"Processed {i}/{num_files} files")
+                    i += 1
                 except Exception as e:
                     print(f"Error processing MIDI file: {e}")
     else:
-        for f in tqdm(filenames[:num_files], desc="Processing MIDI files"):
+        for f in filenames[:num_files]:
             try:
                 notes = midi_to_notes(f)
                 all_notes.append(notes)
+                update_min_max(notes)
+                print(f"Processed {i}/{num_files} files")
+                i += 1
             except Exception as e:
                 print(f"Error processing {f}: {e}")
     all_notes = pd.concat(all_notes)
@@ -81,7 +110,7 @@ def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
     data = data.astype(np.float32)
     # normalize note pitch
     dataset = tf.data.Dataset.from_tensor_slices(data)
-    return dataset, len(data)
+    return dataset, len(data), min_max
 import tensorflow as tf
 
 def create_sequences_tf(
@@ -123,11 +152,9 @@ def create_sequences_tf(
 
 
 def generate_sequence(model: GAN, seed_sequence: int, length:int, filename: str,  temperature=2.0):
-    raw_notes = midi_to_notes(filename)
 
     temperature = 1.0
 
-    sample_notes = np.stack([raw_notes[key] for key in key_order], axis=1)
     data = model.generate_data(1, temperature).numpy()
 
     # assume data in format         fake_data = tf.concat([fake_data['pitch'], fake_data['step'], fake_data['duration']], axis=-1)
@@ -157,7 +184,7 @@ def notes_to_midi(
 #   get first row
   
   for i, note in notes.iterrows():
-    start = float(prev_start + (note['step']/ 10 ))
+    start = float(prev_start + (note['step']))
     end = float(start + note['duration'])
     note = pretty_midi.Note(
         velocity=int(note['velocity']),
@@ -180,6 +207,7 @@ def notes_to_midi(
   ax.set_title('Generated Notes')
   ax.legend()
   plt.savefig(out_file.replace('.mid', '.png'))
+  plt.close()
   pm.instruments.append(instrument)
   pm.write(out_file)
   return pm
@@ -282,19 +310,27 @@ def getMinMaxValues(dataset, vocab_size=128):
         min_max['velocity_max'] = max(min_max['velocity_max'], velocity_max)
 
     return min_max
+
+def generator_callback(args):
+    if not os.path.exists("generator_training"):
+        os.mkdir("generator_training")
+    def call(gan, epoch): 
+        seed_sequence = None
+        generated_notes = generate_sequence(gan, seed_sequence, args.length, None)
+        notes_to_midi(generated_notes, f"generator_training/generated_epoch_{epoch}.mid", "Acoustic Grand Piano")
+    return call 
 def run(args):
-    cls()
+    # cls()
     print("selected gan")
     path = pathlib.Path(args.dataset)
     g_o_d = (args.seq_length,3)
     d_i_d = deepcopy(g_o_d)
     print("Loading MIDI files...")
-    dataset, size = load_all_midi_files(pathlib.Path(args.dataset), args.num_files)
+    dataset, size, min_max = load_all_midi_files(pathlib.Path(args.dataset), args.num_files)
     tf_dataset = create_sequences_tf(dataset, seq_length=args.seq_length)
     print("Shuffling dataset...")
     dataset = tf_dataset.shuffle(buffer_size=size // args.seq_length).batch(args.batch_size, drop_remainder=True)
     print("Loaded dataset")
-    min_max = getMinMaxValues(dataset)
     print("Min and Max values:")
     print("Step Min:", min_max['step_min'], "Step Max:", min_max['step_max'])
     print("Pitch Min:", min_max['pitch_min'], "Pitch Max:", min_max['pitch_max'])
@@ -302,22 +338,23 @@ def run(args):
     print("Velocity Min:", min_max['velocity_min'], "Velocity Max:", min_max['velocity_max'])
     if args.checkpoint:
         print(f"Loading checkpoint from {args.checkpoint}")
-        gan = GAN((args.seq_length,3),g_o_d, d_i_d, True, min_max, args.continue_training)       
+        gan = GAN((args.seq_length,3),g_o_d, d_i_d, True, min_max, args.continue_training)
+        gan.load(args.checkpoint)
         # gan.load(args.checkpoint)
         # gan.load("./")
         print("Loaded checkpoint")
     else: 
         # take one from dataset and save it to midi to check if it is correct
         inspect_batch(dataset, args.seq_length, args.output)
-        gan = GAN((args.seq_length,3),g_o_d, d_i_d, False, min_max, args.continue_training)
-        gan.train(dataset, args.epochs, batch_size=args.batch_size)
+        gan = GAN((args.seq_length,3),g_o_d, d_i_d, args.continue_training, min_max, args.continue_training)
+        gan.train(dataset, args.epochs, batch_size=args.batch_size, continue_training=args.continue_training, callback=generator_callback(args))
         gan.save('model_data/gan.keras')
     midi_files = glob.glob(str(path/'*.mid*'))
     # check if the output directory exists
     if not os.path.exists(args.output):
         os.mkdir(args.output)
     # gan = GAN((args.seq_length,3),g_o_d, d_i_d, True)
-    for n in tqdm(range(args.num_generations), desc="Generating MIDI files"):
+    for n in range(args.num_generations):
         print(f"Generating sequence {n+1}...")
         random_file = random.choice(midi_files)
         seed_sequence = midi_to_notes(random_file)

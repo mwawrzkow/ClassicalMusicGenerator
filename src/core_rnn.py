@@ -47,7 +47,7 @@ def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
     all_notes = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         futures = []
-        for f in tqdm(filenames[:num_files], desc="Processing MIDI files"):
+        for f in filenames[:num_files]:
             try:
                 future = executor.submit(midi_to_notes, f)
                 futures.append(future)
@@ -55,10 +55,13 @@ def load_all_midi_files(directory: str, num_files: int) -> tf.data.Dataset:
                 print(f"Error processing {f}: {e}")
 
         all_notes = []
-        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing MIDI files"):
+        i = 0
+        for future in concurrent.futures.as_completed(futures):
             try:
                 notes = future.result()
                 all_notes.append(notes)
+                print(f"Processed {i}/{num_files} files")
+                i += 1
             except Exception as e:
                 print(f"Error processing MIDI file: {e}")
     all_notes = pd.concat(all_notes)
@@ -103,7 +106,7 @@ def generate_sequence(model: RNNModel, seed_sequence: int, length:int, filename:
     raw_notes = midi_to_notes(filename)
 
     temperature = 3.0
-    num_predictions = 1000
+    num_predictions = 100
 
     sample_notes = np.stack([raw_notes[key] for key in key_order], axis=1)
     input_notes = (
@@ -153,7 +156,7 @@ def notes_to_midi(
   return pm
 
 def run(args): 
-    cls()
+    # cls()
     print("selected rnn")
     path = pathlib.Path(args.dataset)
 
@@ -182,5 +185,5 @@ def run(args):
         seed_sequence = midi_to_notes(random_file)
         generated_notes = generate_sequence(rnn, seed_sequence, args.length, random_file)
         print(f"Generated sequence {n+1}")
-        notes_to_midi(generated_notes, f"output/generated_{n+1}.mid", "Acoustic Grand Piano")
+        notes_to_midi(generated_notes, f"{args.output}/generated_{n+1}.mid", "Acoustic Grand Piano")
         
