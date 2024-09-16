@@ -27,8 +27,6 @@ def midi_to_notes(midi_file: str) -> pd.DataFrame:
     raise ValueError(f"No instruments found in {midi_file}")
   instrument = pm.instruments[0]
   notes = collections.defaultdict(list)
-
-  # Sort the notes by start time
   sorted_notes = sorted(instrument.notes, key=lambda note: note.start)
   prev_start = sorted_notes[0].start
 
@@ -78,22 +76,15 @@ def create_sequences_tf(
 ) -> tf.data.Dataset:
     """Returns TF Dataset of sequence and label examples."""
     seq_length = seq_length + 1
-
-    # Take 1 extra for the labels
     windows = dataset.window(seq_length, shift=1, stride=1, drop_remainder=True)
 
-    # `flat_map` flattens the" dataset of datasets" into a dataset of tensors
     flatten = lambda x: x.batch(seq_length, drop_remainder=True)
     sequences = windows.flat_map(flatten)
 
-    # Normalize note pitch
     def scale_pitch(x):
         x = x / [vocab_size, 1.0, 1.0]
         return x
 
-    # Define key order for labels
-
-    # Split the labels
     def split_labels(sequences):
         inputs = sequences[:-1]
         labels_dense = sequences[-1]
@@ -102,20 +93,18 @@ def create_sequences_tf(
         return scale_pitch(inputs), labels
 
     return sequences.map(split_labels, num_parallel_calls=tf.data.AUTOTUNE)
-def generate_sequence(model: RNNModel, seed_sequence: int, length:int, filename: str,  temperature=2.0):
-    raw_notes = midi_to_notes(filename)
-
-    temperature = 3.0
+def generate_sequence(model: RNNModel, seed_sequence, length:int, filename: str,  temperature=2.0, step_duration_divider=10.0) -> pd.DataFrame:
     num_predictions = 100
 
-    sample_notes = np.stack([raw_notes[key] for key in key_order], axis=1)
+    sample_notes = np.stack([seed_sequence[key] for key in key_order], axis=1)
     input_notes = (
         sample_notes[:length] / np.array([128, 1, 1]))
-
     generated_notes = []
     prev_start = 0
     for _ in tqdm(range(num_predictions), desc="Generating Notes"):
         pitch, step, duration = model.predict_next_note(input_notes,temperature)
+        step = step / step_duration_divider  
+        duration = duration / step_duration_divider  
         start = prev_start + step
         end = start + duration
         input_note = (pitch, step, duration)
@@ -159,7 +148,6 @@ def run(args):
     # cls()
     print("selected rnn")
     path = pathlib.Path(args.dataset)
-
     if args.checkpoint:
         print(f"Loading checkpoint from {args.checkpoint}")
         rnn = RNNModel((args.seq_length,3), 4)        
@@ -174,7 +162,7 @@ def run(args):
         dataset = tf_dataset.shuffle(buffer_size=size // args.seq_length).batch(args.batch_size, drop_remainder=True)
         rnn = RNNModel((args.seq_length,3), 4)
         rnn.train(dataset, args.epochs)
-        rnn.save('model_data/rnn.keras')
+        rnn.save('model_data/rnn_last_try.keras')
     midi_files = glob.glob(str(path/'*.mid*'))
     # check if the output directory exists
     if not os.path.exists(args.output):
@@ -183,7 +171,9 @@ def run(args):
         print(f"Generating sequence {n+1}...")
         random_file = random.choice(midi_files)
         seed_sequence = midi_to_notes(random_file)
-        generated_notes = generate_sequence(rnn, seed_sequence, args.length, random_file)
+        print(f"Seed sequence: {seed_sequence.shape}")
+        print(f"Seed sequence: {seed_sequence.shape}")
+        generated_notes = generate_sequence(rnn, seed_sequence, args.length, random_file, temperature=args.temperature, step_duration_divider=2)
         print(f"Generated sequence {n+1}")
         notes_to_midi(generated_notes, f"{args.output}/generated_{n+1}.mid", "Acoustic Grand Piano")
         

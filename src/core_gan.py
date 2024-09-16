@@ -162,8 +162,27 @@ def generate_sequence(model: GAN, seed_sequence: int, length:int, filename: str,
     # data = data * np.array([128, 1, 1])
     notes = [] 
     for i in range(len(data[0])):
-        notes.append({key_order[j]: data[0][i][j] for j in range(len(key_order))})
+        note_dict = {key_order[j]: data[0][i][j] for j in range(len(key_order))}
+        note_dict['velocity'] = int(np.clip(round(note_dict['velocity']), 1, 127))
+        note_dict['step'] = max(0.0, note_dict['step'])
+        note_dict['duration'] = max(0.1, note_dict['duration'])  # Minimum duration to prevent zero-length notes
+
+
+        notes.append(note_dict)
     data = pd.DataFrame(notes, columns=['pitch', 'step', 'duration', 'velocity'])
+    
+    acceptable_pitch_range = (21, 108)  # Piano range
+    acceptable_step_range = (0.0, 2.0)  # Adjust based on tempo
+    acceptable_duration_range = (0.1, 4.0)
+    acceptable_velocity_range = (20, 127)
+
+    # Filter notes
+    data = data[
+        (data['pitch'].between(*acceptable_pitch_range)) &
+        (data['step'].between(*acceptable_step_range)) &
+        (data['duration'].between(*acceptable_duration_range)) &
+        (data['velocity'].between(*acceptable_velocity_range))
+    ].reset_index(drop=True)
     
     return data 
 
@@ -178,6 +197,14 @@ def notes_to_midi(
   instrument = pretty_midi.Instrument(
       program=pretty_midi.instrument_name_to_program(
           instrument_name))
+  # Calculate cumulative start times
+  notes['start'] = notes['step'].cumsum()  
+  # Calculate end times
+  notes['end'] = notes['start'] + notes['duration']    
+  # Round start times to 3 decimal places for grouping
+  notes['start_rounded'] = notes['start'].round(3)     
+  # Group by rounded start times and limit to 3 notes per start time
+  notes = notes.groupby('start_rounded').head(3).reset_index(drop=True)
 
   prev_start = 0
   generated_notes = []
@@ -186,6 +213,8 @@ def notes_to_midi(
   for i, note in notes.iterrows():
     start = float(prev_start + (note['step']))
     end = float(start + note['duration'])
+    if end <= start:
+        end = start + 0.1  # Minimum duration
     note = pretty_midi.Note(
         velocity=int(note['velocity']),
         pitch=int(note['pitch']),
@@ -208,6 +237,8 @@ def notes_to_midi(
   ax.legend()
   plt.savefig(out_file.replace('.mid', '.png'))
   plt.close()
+#   max notes on the same start time 3 
+  
   pm.instruments.append(instrument)
   pm.write(out_file)
   return pm
