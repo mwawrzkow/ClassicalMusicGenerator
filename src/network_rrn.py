@@ -20,9 +20,6 @@ print(device_lib.list_local_devices())
 
 if not tf.config.list_physical_devices('GPU'):
     print("No GPU found, Training might be slow.")
-    if os.environ.get("IGNORE_NO_GPU", False):
-        pass
-    raise RuntimeError("No GPU found, can't continue.")
 
 @tf.keras.utils.register_keras_serializable()
 def mse_with_positive_pressure(y_true: tf.Tensor, y_pred: tf.Tensor):

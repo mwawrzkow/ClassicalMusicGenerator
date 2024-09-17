@@ -25,10 +25,6 @@ from tensorflow.python.client import device_lib
 print(device_lib.list_local_devices())
 if not tf.config.list_physical_devices('GPU'):
     print("No GPU found, Training might be really slow.")
-    if os.environ.get("IGNORE_NO_GPU", False):
-        pass
-    raise RuntimeError("No GPU found, can't continue.")
-
 
 tf.config.optimizer.set_jit("autoclustering")
 
