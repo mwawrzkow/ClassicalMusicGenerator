@@ -1,5 +1,5 @@
 # Define the TensorFlow image for Windows CPU
-$IMAGE_NAME = "tensorflow/tensorflow:latest"
+$IMAGE_NAME = "nvcr.io/nvidia/tensorflow:23.12-tf2-py3"
 
 # Check if Docker is installed
 if (-not (Get-Command "docker" -ErrorAction SilentlyContinue)) {
