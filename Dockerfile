@@ -53,7 +53,7 @@ WORKDIR /workspace
 COPY ./src /workspace
 
 # Expose necessary ports (e.g., for Flask)
-EXPOSE 5000
+EXPOSE 5000/tcp
 
 # Set DISPLAY for GUI applications
 ENV DISPLAY=${DISPLAY}
