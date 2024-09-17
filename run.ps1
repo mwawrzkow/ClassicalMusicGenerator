@@ -36,7 +36,6 @@ function Run-DockerContainer {
         --ulimit memlock=-1 `
         --ulimit stack=67108864 `
         -v "${PWD}/dockerx:/dockerx" `
-        -v "${PWD}/src:/workspace" `
         -e DISPLAY=$env:DISPLAY `
         -p 5000:5000 `
         mwawrzkow_midi_gan_rnn
