@@ -1,5 +1,6 @@
-# Use NVIDIA's TensorFlow image as the base
-FROM nvcr.io/nvidia/tensorflow:23.12-tf2-py3
+# Use build argument for base image
+ARG IMAGE_NAME
+FROM ${IMAGE_NAME}
 
 # Set environment variables to use the NVIDIA GPU
 ENV NVIDIA_VISIBLE_DEVICES=all
@@ -29,29 +30,33 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies
 RUN pip install --upgrade pip && \
     pip install flask Flask-SocketIO eventlet gevent flask-cors \
-                numpy matplotlib jupyterlab
+                numpy matplotlib jupyterlab music21 tqdm Tornado mido pretty_midi
 
-# Set up user and group based on environment variables UID and GID
-ARG UID=1000
-ARG GID=1000
-RUN groupadd -g ${GID} devgroup && useradd -u ${UID} -g devgroup -m devuser && \
-    echo "devuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# # Set up user and group based on environment variables UID and GID
+# ARG UID=1000
+# ARG GID=1000
+# RUN groupadd -g ${GID} devgroup && useradd -u ${UID} -g devgroup -m devuser && \
+#     echo "devuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# Set the user as the default user for the container
-USER devuser
+# # Set the user as the default user for the container
+# USER devuser
 
 # Set up the working directory
 WORKDIR /workspace
 
+# Create the midi_data directory with proper permissions
+# RUN mkdir -p /workspace/midi_data && chown -R devuser:devgroup /workspace/midi_data
+
 # Copy all files from src/ directory on host to /workspace inside the container
 COPY ./src /workspace
 
-# Expose any necessary ports (e.g., for Flask or JupyterLab)
+# Expose necessary ports (e.g., for Flask)
 EXPOSE 5000
 
 # Set DISPLAY for GUI applications
 ENV DISPLAY=${DISPLAY}
 ENV QT_X11_NO_MITSHM=1
+ENV IGNORE_NO_GPU=True
 
 # Command to run when the container starts
 CMD ["python", "/workspace/website.py"]

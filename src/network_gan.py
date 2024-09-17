@@ -329,11 +329,9 @@ class GAN(BaseModel):
             epoch_disc_loss.append(disc_loss) 
             step += 1
             if pretrain_critic == False: 
-                if step % 10 == 0:
-                    print(f"Step {step}: Generator Loss = {epoch_gen_loss[-1] }, Discriminator Loss = {epoch_disc_loss[-1]}")
+                print(f"Step {step}: Generator Loss = {epoch_gen_loss[-1] }, Discriminator Loss = {epoch_disc_loss[-1]}")
             else:
-                if step % 10 == 0:
-                    print(f"Step {step}: Dyscriminator headstart Discriminator Loss = {epoch_disc_loss[-1]}")
+                print(f"Step {step}: Dyscriminator headstart Discriminator Loss = {epoch_disc_loss[-1]}")
                     
         return epoch_gen_loss, epoch_disc_loss, step
     
@@ -351,7 +349,9 @@ class GAN(BaseModel):
         
         critic_giga_steps = 3
         idx = 0 
+        print(f"Training for {num_epochs} epochs")
         for epoch in range(num_epochs):
+            print(f"Epoch {epoch}")
             pretrain_critic = idx < 5
             idx += 1
             start_time = datetime.now()

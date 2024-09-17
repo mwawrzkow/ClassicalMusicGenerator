@@ -2,6 +2,7 @@ import argparse
 import os
 import sys 
 import shutil
+import urllib.request
 
 parser = argparse.ArgumentParser(description='GAN RNN for generating music')
 
@@ -20,33 +21,30 @@ parser.add_argument('--num_generations', type=int, default=1, help='Number of mi
 parser.add_argument('--continue_training', type=bool, default=False, help='Continue training from the checkpoint')
 
 def download_dataset(dataset):
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        os.system("pip install huggingface_hub")
-        from huggingface_hub import hf_hub_download
+    # check if dataset exists and has midi files
+    if os.path.exists(dataset) and len(os.listdir(dataset)) > 0:
+        return dataset
     if os.path.exists(dataset):
         return "./midi_data/MIDIs"
     if not os.path.exists("midi_data"):
         os.mkdir("midi_data")
-    hf_hub_download(repo_id="asigalov61/Annotated-MIDI-Dataset", 
-                repo_type="dataset", 
-                filename="Annotated-MIDI-Dataset-CC-BY-NC-SA.zip",
-                local_dir="midi_data")
-    
-    print("Extracting the dataset")
-    shutil.unpack_archive("midi_data/Annotated-MIDI-Dataset-CC-BY-NC-SA.zip", "midi_data")
-    print("Removing the zip file")
-    os.remove("midi_data/Annotated-MIDI-Dataset-CC-BY-NC-SA.zip")
-    print("Dataset downloaded and extracted")
-    return "./midi_data/MIDIs"
+    print(f"No dataset found at {dataset}")
+    print(f"Downloading GiantMIDI-Piano dataset")
+    # dataset url is https://github.com/mwawrzkow/ClassicalMusicGenerator/raw/masterthesis/src/GiantMIDI-Piano/midis.zip?download=
+    url = "https://github.com/mwawrzkow/ClassicalMusicGenerator/raw/masterthesis/src/GiantMIDI-Piano/midis.zip?download="
+    urllib.request.urlretrieve(url, "midi_data/midis.zip")
+    print("Download complete")
+    print("Unpacking the dataset")
+    shutil.unpack_archive("midi_data/midis.zip", "midi_data")
+    os.remove("midi_data/midis.zip")
+    return "./midi_data/midis"
 
 if __name__ == '__main__':
     args = parser.parse_args()
     if args.dataset is None or not os.path.exists(args.dataset):
         print(f"Directory {args.dataset} does not exist")
-        print("Will download the dataset from huggingface hub")
-        args.dataset = download_dataset("midi_data")
+        print("Will download the dataset from github and extract it")
+        args.dataset = download_dataset(args.dataset)
     if args.num_files is None:
         args.num_files = len(os.listdir(args.dataset))
     if not os.path.exists(args.output):

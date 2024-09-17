@@ -106,11 +106,12 @@ def read_process_output(p):
         for line in iter(stream.readline, ''):
             if line:
                 emit_log(event_type, line.strip())
+            sleep(0.01)
         stream.close()
     
     # Start green threads to read stdout and stderr
     socketio.start_background_task(target=read_stream, stream=p.stdout, event_type='INFO')
-    socketio.start_background_task(target=read_stream, stream=p.stderr, event_type='ERROR')
+    # socketio.start_background_task(target=read_stream, stream=p.stderr, event_type='ERROR')
     
     p.wait()
     # get process return code
