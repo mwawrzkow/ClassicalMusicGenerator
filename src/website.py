@@ -58,6 +58,7 @@ def generate():
     #json {'model_name': 'WGan', 'num_generations': 10, 'midi_dir': '', 'temperature': '1.0', 'sequence_length': 50}
     # example command python __main__.py             "args": ["--gan", "rnn", "--epochs", "150", "--batch_size", "512", "--dataset", "midis_v1.2/midis", "--seq_length", "50", "--num_files", "1000", "--output", "otp_rnn_final_v3_last_try", "--length", "50", "--temperature", "0.5", "--num_generations", "100","--checkpoint", "model_data/rnn_last_try.keras" ],
     model = request.json['model_name'] if request.json['model_name'] != "WGan" else "gan"
+    model = model.lower()
     num_generations = request.json['num_generations']
     midi_dir = request.json['midi_dir']
     temperature = request.json['temperature']
