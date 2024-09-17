@@ -88,8 +88,6 @@ class GAN(BaseModel):
         self.generator = None
         self.critic = None
         
-        if not tf.config.list_physical_devices('GPU'):
-            raise RuntimeError("No GPU found, can't continue.")
         if min_max is not None:
             print("Min max values found")
             print("The generator will be fine tuned to generate values supported by the dataset")
