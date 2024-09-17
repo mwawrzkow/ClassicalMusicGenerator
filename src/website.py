@@ -195,4 +195,4 @@ def ws_connect():
 
 if __name__ == '__main__':
     # Start the directory monitoring thread
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000, use_reloader=True)
+    socketio.run(app, debug=False, host='0.0.0.0', port=5000)
