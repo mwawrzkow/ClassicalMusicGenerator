@@ -57,7 +57,7 @@ EXPOSE 5000/tcp
 # Set DISPLAY for GUI applications
 ENV DISPLAY=${DISPLAY}
 ENV QT_X11_NO_MITSHM=1
-ENV IGNORE_NO_GPU=True
+ENV IGNORE_NO_GPU=False
 
 # Command to run when the container starts
 CMD ["python", "/workspace/website.py"]
