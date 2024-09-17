@@ -20,3 +20,4 @@ src/*.json
 *.keras
 #ignore all __pycache__ files
 __pycache__/
+src-backup/
