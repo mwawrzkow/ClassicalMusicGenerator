@@ -29,8 +29,9 @@ RUN apt-get update && apt-get install -y \
 
 # Install Python dependencies
 RUN pip install --upgrade pip && \
-            pip install flask Flask-SocketIO eventlet gevent flask-cors \
-            numpy matplotlib jupyterlab music21 tqdm Tornado mido pretty_midi
+pip install flask Flask-SocketIO eventlet gevent flask-cors \
+            numpy matplotlib jupyterlab music21 tqdm Tornado mido pretty_midi --ignore-installed blinker
+
 
 
 # # Set up user and group based on environment variables UID and GID
