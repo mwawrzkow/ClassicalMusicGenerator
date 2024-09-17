@@ -38,6 +38,7 @@ function Run-DockerContainer {
         -v "${PWD}/dockerx:/dockerx" `
         -v "${PWD}/src:/workspace" `
         -e DISPLAY=$env:DISPLAY `
+        -p 5000:5000 `
         mwawrzkow_midi_gan_rnn
 
     # Check if the container run succeeded
