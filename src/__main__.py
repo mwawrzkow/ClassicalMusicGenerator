@@ -30,8 +30,7 @@ def download_dataset(dataset):
         os.mkdir("midi_data")
     print(f"No dataset found at {dataset}")
     print(f"Downloading GiantMIDI-Piano dataset")
-    # dataset url is https://github.com/mwawrzkow/ClassicalMusicGenerator/raw/masterthesis/src/GiantMIDI-Piano/midis.zip?download=
-    url = "https://github.com/mwawrzkow/ClassicalMusicGenerator/raw/masterthesis/src/GiantMIDI-Piano/midis.zip?download="
+    url = "https://github.com/mwawrzkow/ClassicalMusicGenerator/raw/refs/heads/master/src/GiantMIDI-Piano/midis.zip?download="
     urllib.request.urlretrieve(url, "midi_data/midis.zip")
     print("Download complete")
     print("Unpacking the dataset")
