@@ -9,3 +9,12 @@ plots/
 *.npy 
 *output.mid
 *.png
+src/midi
+src/cache 
+src/src/*
+!src/*.py
+src/*.json
+# ignore any .keras files anywhere in the repository
+#ignore all __pycache__ files
+__pycache__/
+src-backup/
