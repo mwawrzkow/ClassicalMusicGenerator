@@ -93,7 +93,7 @@ def create_sequences_tf(
         return scale_pitch(inputs), labels
 
     return sequences.map(split_labels, num_parallel_calls=tf.data.AUTOTUNE)
-def generate_sequence(model: RNNModel, seed_sequence, length:int, filename: str,  temperature=2.0, step_duration_divider=10.0) -> pd.DataFrame:
+def generate_sequence(model: RNNModel, seed_sequence, length:int, filename: str,  temperature=1.0) -> pd.DataFrame:
     num_predictions = 100
 
     sample_notes = np.stack([seed_sequence[key] for key in key_order], axis=1)
@@ -102,9 +102,7 @@ def generate_sequence(model: RNNModel, seed_sequence, length:int, filename: str,
     generated_notes = []
     prev_start = 0
     for _ in tqdm(range(num_predictions), desc="Generating Notes"):
-        pitch, step, duration = model.predict_next_note(input_notes,temperature)
-        step = step / step_duration_divider  
-        duration = duration / step_duration_divider  
+        pitch, step, duration = model.predict_next_note(input_notes,temperature) 
         start = prev_start + step
         end = start + duration
         input_note = (pitch, step, duration)
@@ -173,7 +171,7 @@ def run(args):
         seed_sequence = midi_to_notes(random_file)
         print(f"Seed sequence: {seed_sequence.shape}")
         print(f"Seed sequence: {seed_sequence.shape}")
-        generated_notes = generate_sequence(rnn, seed_sequence, args.length, random_file, temperature=args.temperature, step_duration_divider=2)
+        generated_notes = generate_sequence(rnn, seed_sequence, args.length, random_file, temperature=args.temperature)
         print(f"Generated sequence {n+1}")
         notes_to_midi(generated_notes, f"{args.output}/generated_{n+1}.mid", "Acoustic Grand Piano")
         
