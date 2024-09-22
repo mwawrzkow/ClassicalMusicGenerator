@@ -3,11 +3,16 @@
 # Check for GPU on the system
 IS_NVIDIA_GPU=$(lspci | grep -i nvidia)
 IS_AMD_GPU=$(lspci | grep -i amd)
+IMAGE_OVERRIDE=$1 # Optional argument to override default image
+
+
+
+
 
 # Set IMAGE_NAME based on available GPU
-if [ -n "$IS_NVIDIA_GPU" ]; then
+if [ -n "$IS_NVIDIA_GPU" ] | [ '$IMAGE_OVERRIDE' == 'nvidia' ]; then
     IMAGE_NAME=nvcr.io/nvidia/tensorflow:23.12-tf2-py3
-elif [ -n "$IS_AMD_GPU" ]; then
+elif [ -n "$IS_AMD_GPU" ] | [ '$IMAGE_OVERRIDE' == 'amd' ]; then
     IMAGE_NAME=rocm/tensorflow:latest
 else
     IMAGE_NAME=tensorflow/tensorflow:latest
