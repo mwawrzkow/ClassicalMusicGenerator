@@ -48,12 +48,15 @@ if __name__ == '__main__':
         args.num_files = len(os.listdir(args.dataset))
     if not os.path.exists(args.output):
         os.mkdir(args.output)
-    if args.gan not in ['gan', 'rnn']:
+    if args.gan not in ['gan', 'rnn', 'transformer']:
         print(f"Invalid GAN type: {args.gan}")
         sys.exit(1)
     if args.gan == 'rnn':
         import core_rnn
         core_rnn.run(args)
+    elif args.gan == 'transformer':
+        import core_transformer
+        core_transformer.run(args)
     else:
         import core_gan
         core_gan.run(args)

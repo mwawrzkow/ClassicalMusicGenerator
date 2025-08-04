@@ -66,7 +66,7 @@ def generate():
     midi_dir = midi_dir if midi_dir else "midi_data/MIDIs"
     num_files = request.json['num_files'] if request.json['num_files'] != 0 else len(os.listdir(midi_dir))
     command = f"python __main__.py --gan {model} --epochs 0 --num_generations {num_generations} --dataset {midi_dir} --temperature {temperature} --seq_length {sequence_length} --length {sequence_length} --output output"
-    model_checkpoint = "model_data/rnn_last_try.keras" if model == "rnn" else "model_data/"
+    model_checkpoint = "model_data/rnn_last_try.keras" if model == "rnn" else "model_data/transformer.keras" if model == "transformer" else "model_data/"
     command = f"{command} --checkpoint {model_checkpoint} --dataset {midi_dir} --num_files {num_files}"
     if not process:
         process = subprocess.Popen(
@@ -98,6 +98,20 @@ def get_logs():
         for log in logs:
             f.write(f"{log['timestamp']} {log['event']} {log['message']}\n")
     return send_from_directory(os.getcwd(), "logs.log", as_attachment=True)
+
+@app.route("/generated-files", methods=['GET'])
+def generated_files():
+    generated_dir = "generated"
+    if not os.path.exists(generated_dir):
+        return jsonify([])
+
+    files = []
+    for root, _, filenames in os.walk(generated_dir):
+        for filename in filenames:
+            files.append(os.path.join(root, filename))
+
+    return jsonify(files)
+
 def read_process_output(p):
     """Read the subprocess stdout and stderr and emit to clients."""
     global command
